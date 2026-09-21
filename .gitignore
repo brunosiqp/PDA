@@ -4,6 +4,7 @@
 !.env.example
 *.env
 CREDENCIAIS_CENTRALIZADAS.env
+aliases_privados.json
 chave.key
 config.dat
 

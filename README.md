@@ -10,7 +10,8 @@ roda na máquina de quem opera (não é um serviço hospedado).
 > sensível** da **Inventti**, a empresa onde o PDA é utilizado, nem de seus
 > clientes ou colaboradores: sem credenciais, tokens ou URLs assinadas, sem dados
 > pessoais (nomes, e-mails, fotos, histórico de RH), sem endereços, servidores ou
-> caminhos de rede internos. Tudo o que é específico de um ambiente vem de
+> caminhos de rede internos, sem CNPJs e sem nomes de clientes (todos aparecem
+> como pseudônimos: `ClienteA`, `cliente_b`...). Tudo o que é específico de um ambiente vem de
 > variáveis de ambiente e de arquivos locais que ficam fora do git. Detalhes em
 > [Privacidade e LGPD](#privacidade-e-lgpd).
 
@@ -63,6 +64,17 @@ descritas em [`.env.example`](.env.example) no ambiente do processo. Principais:
 | `PDA_LINK_WEB`, `PDA_NOME_AMIGAVEL_WEB` | Endereço exibido nos e-mails e nome amigável do servidor. |
 | `EMAILPACK_*`, `PDA_FTP_UNC`, `PDA_*_PASTA` | Servidores e pastas de rede dos monitores. |
 
+### Nomes de clientes (pseudônimos)
+
+O código só usa pseudônimos (`ClienteA`, `cliente_b`, `FornecedorA`...). Quem
+opera o PDA cria, **fora do git**, um `aliases_privados.json` ao lado do programa
+(ou aponta `PDA_ALIASES_PRIVADOS`) com o mapa pseudônimo → nome real; veja
+[`aliases_privados.example.json`](aliases_privados.example.json). O mapa é aplicado só onde o
+nome vira chave de verdade (seções e chaves de configuração, pastas e logs,
+nomes dos alertas, permissões antigas do `usuarios.json`). Sem o arquivo, tudo
+funciona com os pseudônimos, o que basta para desenvolver e testar. Os CNPJs
+usados por consultas vêm de variáveis de ambiente (`PDA_CNPJ_*`).
+
 Segredos (senhas de banco, SMTP, webhook do Teams) ficam em arquivos `.env*`,
 `config.dat` e `chave.key` locais, **todos no `.gitignore`**.
 
@@ -87,7 +99,8 @@ O projeto segue a LGPD **sempre**. Regras para quem contribui:
    férias, histórico de carreira, logins ou senhas, nem em comentários,
    exemplos, testes ou mensagens de commit.
 3. **Nunca** commitar dados de infraestrutura real: hosts, IPs, compartilhamentos
-   de rede, identificadores de tenant ou de relatório.
+   de rede, identificadores de tenant ou de relatório, nem nomes ou CNPJs de
+   clientes: use os pseudônimos e o `aliases_privados.json` (fora do git).
 4. Arquivos de dados de runtime (`usuarios.json`, `feedbacks_usuarios.json`,
    `historico_carreira.json`, `ferias.json` e similares) ficam fora do
    repositório. Em desenvolvimento e testes, use apenas dados **fictícios**

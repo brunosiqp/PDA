@@ -36,6 +36,16 @@ Padrão híbrido para credenciais: tenta primeiro o arquivo central por seção 
 cai no `.env` legado individual se a seção não existir. Config ausente nunca
 derruba o app: mostra erro claro na tela.
 
+## Pseudônimos de cliente
+
+Nomes reais de cliente e fornecedor não entram no código. Convenção: `ClienteA`
+/ `cliente_a` / `CLIENTE_A` (por caixa, do A ao I) e `FornecedorA`. Ao criar
+algo novo que dependa de um cliente, escolha o próximo pseudônimo livre e use
+`_alias_real()` só onde o nome real é necessário de fato (chave de config,
+pasta, arquivo de log, nome do alerta). O mapa pseudônimo → real fica no
+`aliases_privados.json`, **fora do git**. Nunca escreva o nome real em código,
+comentário, teste ou mensagem de commit.
+
 ## Versionamento
 
 SemVer em `VERSAO_PDA` (topo do arquivo, seção de versão):

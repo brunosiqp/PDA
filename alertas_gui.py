@@ -170,14 +170,14 @@ except Exception as _e:
         "pandas",
         "Rode: py -m pip install -r requirements.txt\n"
         "(ou, isolado: py -m pip install pandas xlsxwriter)\n"
-        "Usado pelos Relatórios Shein.",
+        "Usado pelos Relatórios ClienteA.",
         _e,
     )
 
 try:
     import xlsxwriter  # noqa: F401 - não é usado direto no código, só precisa
     # estar instalado porque o pandas usa ele por baixo dos panos (engine=
-    # "xlsxwriter") pra gerar os arquivos .xlsx dos Relatórios Shein. Sem
+    # "xlsxwriter") pra gerar os arquivos .xlsx dos Relatórios ClienteA. Sem
     # essa checagem aqui, o erro só aparecia na hora de gerar o relatório
     # de verdade, com uma mensagem meio críptica.
 except Exception as _e:
@@ -185,7 +185,7 @@ except Exception as _e:
         "xlsxwriter",
         "Rode: py -m pip install -r requirements.txt\n"
         "(ou, isolado: py -m pip install xlsxwriter)\n"
-        "Usado pelos Relatórios Shein pra gerar os arquivos .xlsx.",
+        "Usado pelos Relatórios ClienteA pra gerar os arquivos .xlsx.",
         _e,
     )
 
@@ -274,7 +274,7 @@ class Job:
     registrar_horarios: Callable[[Callable[[], None]], List["schedule.Job"]] = agenda_todo_dia_hora_cheia
 
 
-# Cada item de `clientes` pode ser uma string simples ("accor") ou uma
+# Cada item de `clientes` pode ser uma string simples ("cliente_d") ou uma
 # tupla (nome_exibicao, chave_env) - usada quando o mesmo cliente aparece
 # em mais de um alerta, pra cada um ler seu próprio .env (ver Cliente em
 # alerta_core/cliente.py pro motivo completo).
@@ -304,6 +304,8 @@ def job_alerta(
     clientes: List[ClienteOuTupla],
     registrar_horarios: Callable[[Callable[[], None]], List["schedule.Job"]] = agenda_todo_dia_hora_cheia,
 ) -> Job:
+    nome, descricao = _alias_real(nome), _alias_real(descricao)
+    clientes = [_alias_real_cliente(c) for c in clientes]
     for c in clientes:
         nome_exibicao, chave_env = c if isinstance(c, tuple) else (c, c)
         REGISTRO_CLIENTES_ALERTAS.append(
@@ -356,10 +358,10 @@ def _executar_validacao_ftp() -> None:
 
     clientes_acima = {}
     for cliente, caminho in dic_clientes.items():
-        dir_datalog = os.path.join(caminho, "Datalog")
-        if not os.path.isdir(dir_datalog):
+        dir_fornecedor_a = os.path.join(caminho, _alias_real("FornecedorA"))
+        if not os.path.isdir(dir_fornecedor_a):
             continue
-        total_arq = sum(1 for entry in os.scandir(dir_datalog) if entry.is_file())
+        total_arq = sum(1 for entry in os.scandir(dir_fornecedor_a) if entry.is_file())
         if total_arq >= 100:
             clientes_acima[cliente] = total_arq
 
@@ -398,6 +400,59 @@ from core.config_seguro import (
     salvar_config_dat as _salvar_config_dat,
 )
 
+# ---------------------------------------------------------------------------
+# Aliases privados. Este código-fonte é público e só usa pseudônimos de cliente
+# (ClienteA, cliente_b...). O arquivo `aliases_privados.json` (ao lado do
+# programa, FORA do git, ou o caminho em PDA_ALIASES_PRIVADOS) traduz cada
+# pseudônimo pro nome real, e só nos pontos onde o nome vira chave de verdade
+# (config, pastas, logs, nomes de alerta). Sem o arquivo, tudo segue com os
+# pseudônimos, o que serve pra desenvolver/testar sem expor nada.
+# ---------------------------------------------------------------------------
+_ALIASES_CACHE: Optional[dict] = None
+
+
+def _carregar_aliases_privados() -> dict:
+    global _ALIASES_CACHE
+    if _ALIASES_CACHE is None:
+        caminho = os.environ.get("PDA_ALIASES_PRIVADOS") or os.path.join(_base_path_app(), "aliases_privados.json")
+        dados: dict = {}
+        try:
+            if os.path.exists(caminho):
+                with open(caminho, "r", encoding="utf-8") as f:
+                    dados = json.load(f)
+        except Exception:
+            logging.getLogger("alertas").exception("Não foi possível ler o arquivo de aliases privados.")
+        _ALIASES_CACHE = {str(k): str(v) for k, v in dados.items()}
+    return _ALIASES_CACHE
+
+
+def _substituir_de_mapa(texto, mapa: dict):
+    """Troca de uma vez só (sem encadear trocas) todas as chaves do mapa,
+    a mais longa primeiro, pra um pseudônimo nunca ser cortado no meio."""
+    if not isinstance(texto, str) or not mapa:
+        return texto
+    padrao = "|".join(re.escape(k) for k in sorted(mapa, key=len, reverse=True))
+    return re.sub(padrao, lambda m: mapa[m.group(0)], texto)
+
+
+def _alias_real(texto):
+    """pseudônimo -> nome real (identidade se não houver arquivo privado)."""
+    return _substituir_de_mapa(texto, _carregar_aliases_privados())
+
+
+def _real_alias(texto):
+    """nome real -> pseudônimo (usado só pra migrar dados antigos)."""
+    return _substituir_de_mapa(texto, {v: k for k, v in _carregar_aliases_privados().items()})
+
+
+def _alias_real_cliente(cliente):
+    return tuple(_alias_real(x) for x in cliente) if isinstance(cliente, tuple) else _alias_real(cliente)
+
+
+# Nomes de arquivo/pasta que existem no disco com o nome real
+_ARQ_LOG_RELATORIO_A = _alias_real("relatorios_cliente_a" + ".log")
+
+
 # CREDENCIAIS_CENTRALIZADAS.env - arquivo único que substitui os ~40 .env
 # espalhados (ver conversa de 05/09/2026). Mesma ideia de import separado
 # do config_seguro acima: evita import circular com alerta_core.
@@ -430,6 +485,22 @@ except ImportError:
             load_dotenv(dotenv_path=env_path, override=True)
         return {chave: os.getenv(chave, "") for chave in chaves}
 
+
+# Os nomes de seção/arquivo/chave no código são pseudônimos; aqui voltam pro
+# nome real (ver aliases privados) antes de tocar em qualquer arquivo de config.
+_obter_config_hibrido_bruto = _obter_config_hibrido
+_obter_valor_config_bruto = _obter_valor_config
+
+
+def _obter_config_hibrido(secao_central: str, nome_arquivo_env: str, chaves: list) -> dict:
+    reais = [_alias_real(c) for c in chaves]
+    valores = _obter_config_hibrido_bruto(_alias_real(secao_central), _alias_real(nome_arquivo_env), reais)
+    return {c: valores.get(r, "") for c, r in zip(chaves, reais)}
+
+
+def _obter_valor_config(chave: str, *args, **kwargs):
+    return _obter_valor_config_bruto(_alias_real(chave), *args, **kwargs)
+
 # ---------------------------------------------------------------------------
 # Atualização Dash Financeiro - adaptado do notebook
 # Atualizacao_Dash_Financeiro.ipynb que o solicitante mandou. Pra cada produto
@@ -444,6 +515,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+# CNPJ excluído da lista "Nao Especificado" do consolidado de NFSe Out (vem do ambiente).
+CNPJ_EXCLUIDO_NFSE_OUT = os.environ.get("PDA_CNPJ_EXCLUIDO_NFSE_OUT", "00000000000000")
 PASTA_BASE_DASH_FINANCEIRO = os.environ.get("PDA_DASH_FINANCEIRO_PASTA", r"C:\PDA\PowerBI\Financeiro")
 
 # nome da pasta de saída de cada produto - a maioria bate com a chave do
@@ -978,7 +1051,7 @@ def _queries_saas(periodo: dict) -> list:
         FROM INTERF_NFSE_XML WITH (NOLOCK)
         WHERE DAT_HOR_EMIS_RPS BETWEEN '{periodo["ini"]} 00:00:00' AND '{periodo["fim"]} 23:59:59'
         	AND PRE_CPF_CNPJ IS NOT NULL
-            AND NOT PRE_CPF_CNPJ = '61031928000128'
+            AND NOT PRE_CPF_CNPJ = '{CNPJ_EXCLUIDO_NFSE_OUT}'
         GROUP BY PRE_CPF_CNPJ, PRE_RAZSOC
         ORDER BY QTD DESC
         """,
@@ -1245,21 +1318,21 @@ def _executar_dash_financeiro_mensal_se_dia_1() -> None:
 
 
 
-def _executar_valor_zerado_bmw() -> None:
+def _executar_valor_zerado_cliente_c() -> None:
     """Zera o status de documentos rejeitados por 'valor de serviço 0' pra
-    reprocessamento, para os tomadores BMW. Lógica SQL identica ao script
-    original valor_zerado_BMW.py - só a leitura do .env e o logging que
+    reprocessamento, para os tomadores CLIENTE_C. Lógica SQL identica ao script
+    original valor_zerado_CLIENTE_C.py - só a leitura do .env e o logging que
     foram adaptados pra entrar no padrão do painel."""
-    # CREDENCIAIS_CENTRALIZADAS.env primeiro (seção [infra_bmw_valor_zerado]),
+    # CREDENCIAIS_CENTRALIZADAS.env primeiro (seção [infra_cliente_c_valor_zerado]),
     # cai pro .env tradicional (bare, sem sufixo) se essa seção não existir.
     valores = _obter_config_hibrido(
-        "infra_bmw_valor_zerado", ".env",
+        "infra_cliente_c_valor_zerado", ".env",
         ["DB_SERVER", "DB_DATABASE", "DB_USER", "DB_PASSWORD"],
     )
     servidor = valores["DB_SERVER"]
     banco = valores["DB_DATABASE"]
     usuario = valores["DB_USER"]
-    senha = _obter_valor_config("bmw::DB_PASSWORD", valores["DB_PASSWORD"])
+    senha = _obter_valor_config("cliente_c::DB_PASSWORD", valores["DB_PASSWORD"])
 
     conn = None
     try:
@@ -1285,7 +1358,7 @@ def _executar_valor_zerado_bmw() -> None:
         """
         cursor.execute(sql)
         conn.commit()
-        logger.info("Valor Zerado BMW: %d registro(s) atualizado(s).", cursor.rowcount)
+        logger.info("Valor Zerado CLIENTE_C: %d registro(s) atualizado(s).", cursor.rowcount)
         cursor.close()
     finally:
         if conn:
@@ -1297,17 +1370,17 @@ def _executar_valor_zerado_bmw() -> None:
 # ---------------------------------------------------------------------------
 JOBS: List[Job] = [
     job_alerta(
-        nome="Pendências Datalog NFSe",
-        descricao="Documentos não processados pela Datalog.",
-        clientes=[("saas", "saas__pendencias_datalog")],
+        nome="Pendências FornecedorA NFSe",
+        descricao="Documentos não processados pela FornecedorA.",
+        clientes=[("saas", "saas__pendencias_fornecedor_a")],
     ),
     job_alerta(
         nome="NFSe Status Transitório",
         descricao=(
-            "Documentos fiscais da Accor com status 'Transitório' por "
+            "Documentos fiscais da ClienteD com status 'Transitório' por "
             "mais de 15 minutos."
         ),
-        clientes=["accor"],
+        clientes=["cliente_d"],
     ),
     job_alerta(
         nome="Manifestações",
@@ -1316,20 +1389,20 @@ JOBS: List[Job] = [
             "automaticamente pela aplicação e não foram."
         ),
         clientes=[
-            ("acom", "acom__manifestacoes"),
-            ("nissei", "nissei__manifestacoes"),
+            ("cliente_h", "cliente_h__manifestacoes"),
+            ("cliente_e", "cliente_e__manifestacoes"),
             ("saas2", "saas2__manifestacoes"),
         ],
     ),
     job_alerta(
-        nome="Retorno Personalizado Nissei",
+        nome="Retorno Personalizado ClienteE",
         descricao=(
             "Documentos no qual possuem retorno personalizado configurado "
             "porém não obtiveram retorno."
         ),
         clientes=[
-            ("nissei", "nissei__retorno_personalizado"),
-            ("acom", "acom__retorno_personalizado"),
+            ("cliente_e", "cliente_e__retorno_personalizado"),
+            ("cliente_h", "cliente_h__retorno_personalizado"),
         ],
     ),
     job_alerta(
@@ -1344,12 +1417,12 @@ JOBS: List[Job] = [
             "transitório."
         ),
         clientes=[
-            "Accor-NFSe1",
-            "Accor-NFSe2",
-            "MyrpEnterprise",
-            "MyrpStandart",
-            "Nissei-NFe",
-            "Nissei-CTe",
+            "ClienteD-NFSe1",
+            "ClienteD-NFSe2",
+            "ClienteIEnterprise",
+            "ClienteIStandart",
+            "ClienteE-NFe",
+            "ClienteE-CTe",
             "SaaS-NFe",
             "SaaS-CTe",
             "SaaS-NFSe1",
@@ -1377,9 +1450,9 @@ JOBS: List[Job] = [
             "por mais de 30 minutos."
         ),
         clientes=[
-            "myrpenterprise",
-            "myrpstandart",
-            ("nissei", "nissei__nfe_status_transitorio"),
+            "cliente_i_enterprise",
+            "cliente_i_standart",
+            ("cliente_e", "cliente_e__nfe_status_transitorio"),
             ("saas", "saas__nfe_status_transitorio"),
             ("saas2", "saas2__nfe_status_transitorio"),
         ],
@@ -1390,17 +1463,17 @@ JOBS: List[Job] = [
         clientes=[("saas", "saas__cte_status_30")],
     ),
     job_alerta(
-        nome="CTe Incompleto Tramontina",
-        descricao="CTe travados em status 0 (Incompleto) na Tramontina",
-        clientes=[("saas", "saas__cte_incompleto_tramontina")],
+        nome="CTe Incompleto ClienteF",
+        descricao="CTe travados em status 0 (Incompleto) na ClienteF",
+        clientes=[("saas", "saas__cte_incompleto_cliente_f")],
     ),
-    # "Valor Zerado BMW" desativado a pedido do solicitante (04/09/2026) - a
-    # função _executar_valor_zerado_bmw() continua no código, só não é
+    # "Valor Zerado CLIENTE_C" desativado a pedido do solicitante (04/09/2026) - a
+    # função _executar_valor_zerado_cliente_c() continua no código, só não é
     # mais registrada/agendada. Pra reativar, é só descomentar o Job
     # abaixo.
     # Job(
-    #     nome="Valor Zerado BMW",
-    #     executar=_executar_valor_zerado_bmw,
+    #     nome="Valor Zerado CLIENTE_C",
+    #     executar=_executar_valor_zerado_cliente_c,
     #     registrar_horarios=agenda_a_cada_4_horas,
     # ),
     Job(
@@ -1501,13 +1574,13 @@ def _criar_handler_arquivo(nome_arquivo: str, max_mb: int = 5, backups: int = 5)
 
 logger.addHandler(_criar_handler_arquivo("alertas_suporte.log"))
 
-# Log isolado dos Relatórios Shein (geração + envio ao SharePoint) -
+# Log isolado dos Relatórios ClienteA (geração + envio ao SharePoint) -
 # facilita achar e mandar exatamente o que aconteceu numa falha, sem
 # precisar filtrar no meio do log dos outros 12 alertas.
-logger_shein = logging.getLogger("alertas.shein")
-logger_shein.setLevel(logging.INFO)
-logger_shein.propagate = False  # NÃO escreve em alertas_suporte.log - só no arquivo próprio
-logger_shein.addHandler(_criar_handler_arquivo("relatorios_shein.log", max_mb=2, backups=3))
+logger_cliente_a = logging.getLogger("alertas.cliente_a")
+logger_cliente_a.setLevel(logging.INFO)
+logger_cliente_a.propagate = False  # NÃO escreve em alertas_suporte.log - só no arquivo próprio
+logger_cliente_a.addHandler(_criar_handler_arquivo(_ARQ_LOG_RELATORIO_A, max_mb=2, backups=3))
 
 # Log isolado da Atualização Dash Financeiro (os 9 produtos).
 logger_dash_financeiro = logging.getLogger("alertas.dash_financeiro")
@@ -1547,7 +1620,7 @@ CAMINHO_LOGS_MONITORAMENTO = os.environ.get("PDA_LOGS_MONITORAMENTO", r"C:\PDA\M
 
 LOGS_DISPONIVEIS = {
     "Alertas Suporte": (_PASTA_LOGS, "alertas_suporte.log"),
-    "Relatórios Shein": (_PASTA_LOGS, "relatorios_shein.log"),
+    "Relatórios ClienteA": (_PASTA_LOGS, _ARQ_LOG_RELATORIO_A),
     "Atualização Dash Financeiro": (_PASTA_LOGS, "dash_financeiro.log"),
     "Automação Movidesk": (_PASTA_LOGS, "automacao_movidesk.log"),
     "Monitoramento EmailPack": (_PASTA_LOGS, "monitoramento_emailpack.log"),
@@ -1606,12 +1679,12 @@ _queue_handler = QueueLogHandler()
 _queue_handler.setFormatter(_formatter)
 logger.addHandler(_queue_handler)
 
-# Como os loggers isolados (shein, dash financeiro, administração,
+# Como os loggers isolados (cliente_a, dash financeiro, administração,
 # automação movidesk) não propagam mais pro "alertas" pai (ver acima -
 # propagate = False, pra não misturar nos arquivos), precisam do MESMO
 # handler da tela ao vivo adicionado neles direto também, senão
 # sumiriam da tela ao vivo do painel - só ficariam nos arquivos.
-for _logger_isolado in (logger_shein, logger_dash_financeiro, logger_administracao, logger_automacao_movidesk):
+for _logger_isolado in (logger_cliente_a, logger_dash_financeiro, logger_administracao, logger_automacao_movidesk):
     _logger_isolado.addHandler(_queue_handler)
 
 
@@ -3713,11 +3786,11 @@ def _validar_dados_relatorio_banco(dados: dict) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Relatórios Shein
+# Relatórios ClienteA
 # ---------------------------------------------------------------------------
 # Porta pro painel web o processo que hoje roda manualmente num notebook
-# Jupyter: consulta CTe/CTe-canceladas do banco de produção do Shein
-# (shein_cte_prd) pra uma data específica, e gera os dois arquivos Excel
+# Jupyter: consulta CTe/CTe-canceladas do banco de produção do ClienteA
+# (cliente_a_cte_prd) pra uma data específica, e gera os dois arquivos Excel
 # (Notas e Canceladas) exatamente como o notebook fazia - incluindo o
 # split em "Parte 1"/"Parte 2" quando passa de ~1 milhão de linhas.
 #
@@ -3731,33 +3804,33 @@ def _validar_dados_relatorio_banco(dados: dict) -> Optional[str]:
 MAX_LINHAS_POR_ABA_EXCEL = 1_048_576 - 1
 
 
-def _config_shein() -> dict:
-    """Lê as credenciais do banco Shein - CREDENCIAIS_CENTRALIZADAS.env
-    primeiro (seção [infra_shein]), cai pro .env.shein tradicional se
+def _config_cliente_a() -> dict:
+    """Lê as credenciais do banco ClienteA - CREDENCIAIS_CENTRALIZADAS.env
+    primeiro (seção [infra_cliente_a]), cai pro .env.cliente_a tradicional se
     essa seção não existir (ver core/config_central.py)."""
     valores = _obter_config_hibrido(
-        "infra_shein", ".env.shein",
-        ["SHEIN_DB_SERVER", "SHEIN_DB_DATABASE", "SHEIN_DB_USER", "SHEIN_DB_PASSWORD"],
+        "infra_cliente_a", ".env.cliente_a",
+        ["CLIENTE_A_DB_SERVER", "CLIENTE_A_DB_DATABASE", "CLIENTE_A_DB_USER", "CLIENTE_A_DB_PASSWORD"],
     )
     return {
-        "server": valores["SHEIN_DB_SERVER"],
-        "database": valores["SHEIN_DB_DATABASE"],
-        "username": valores["SHEIN_DB_USER"],
-        "password": _obter_valor_config("shein::SHEIN_DB_PASSWORD", valores["SHEIN_DB_PASSWORD"]),
+        "server": valores["CLIENTE_A_DB_SERVER"],
+        "database": valores["CLIENTE_A_DB_DATABASE"],
+        "username": valores["CLIENTE_A_DB_USER"],
+        "password": _obter_valor_config("cliente_a::CLIENTE_A_DB_PASSWORD", valores["CLIENTE_A_DB_PASSWORD"]),
     }
 
 
-def _conectar_shein():
-    cfg = _config_shein()
+def _conectar_cliente_a():
+    cfg = _config_cliente_a()
     if not all(cfg.values()):
-        return None, "Credenciais do banco Shein não configuradas (.env.shein)."
+        return None, "Credenciais do banco ClienteA não configuradas (.env.cliente_a)."
     try:
         conn = conectar_banco(cfg["server"], cfg["database"], cfg["username"], cfg["password"])
     except Exception as e:
-        logger.exception("Erro inesperado ao conectar no banco Shein")
+        logger.exception("Erro inesperado ao conectar no banco ClienteA")
         return None, f"Erro inesperado ao conectar: {e}"
     if not conn:
-        return None, "Não foi possível conectar ao banco Shein."
+        return None, "Não foi possível conectar ao banco ClienteA."
     return conn, None
 
 
@@ -4744,30 +4817,30 @@ def _gerar_excel_export_horas(linhas_resumo: list, detalhe: list) -> bytes:
     return buffer.getvalue()
 
 
-def _pasta_saida_relatorios_shein(data: datetime) -> str:
+def _pasta_saida_relatorios_cliente_a(data: datetime) -> str:
     """Pasta local onde os relatórios de um dia específico ficam salvos -
     organizada em Mês (inglês) / DD-MM-YYYY, espelhando exatamente a
-    mesma estrutura usada no SharePoint (ver _enviar_relatorio_shein_
+    mesma estrutura usada no SharePoint (ver _enviar_relatorio_cliente_a_
     sharepoint) - pedido pra manter os dois arquivamentos consistentes a
     partir de agora. Cria a pasta se ainda não existir."""
     pasta = os.path.join(
-        _base_path_app(), "relatorios_shein_saida",
+        _base_path_app(), _alias_real("relatorios_cliente_a_saida"),
         MESES_INGLES[data.month], data.strftime("%d-%m-%Y"),
     )
     os.makedirs(pasta, exist_ok=True)
     return pasta
 
 
-def _localizar_pasta_relatorio_shein_por_data_str(data_arquivo: str) -> str:
+def _localizar_pasta_relatorio_cliente_a_por_data_str(data_arquivo: str) -> str:
     """Reconstrói a pasta local (Mês/DD-MM-YYYY) a partir de uma data no
     formato 'DD-MM-YYYY' (o mesmo formato usado no nome dos arquivos) -
     usado pelas rotas que só recebem a data em texto, sem um objeto
     datetime já pronto."""
     data_obj = datetime.strptime(data_arquivo, "%d-%m-%Y")
-    return _pasta_saida_relatorios_shein(data_obj)
+    return _pasta_saida_relatorios_cliente_a(data_obj)
 
 
-def _construir_queries_shein(data: datetime) -> tuple:
+def _construir_queries_cliente_a(data: datetime) -> tuple:
     """Mesma consulta SQL usada hoje no notebook Jupyter (CTe + CTe
     canceladas), só parametrizada pela data. Mantida fiel ao original."""
     data_ini = data.strftime("%Y-%m-%d 00:00:00")
@@ -4874,7 +4947,7 @@ ORDER BY icx.ID ASC;
     return query_notas, query_canceladas
 
 
-def _dataframe_shein(query: str, conn) -> "pd.DataFrame":
+def _dataframe_cliente_a(query: str, conn) -> "pd.DataFrame":
     """Mesma função `dataframe()` do notebook original - roda a query e
     normaliza as colunas de CNPJ pra string (evita notação científica /
     perda de zero à esquerda no Excel)."""
@@ -4888,7 +4961,7 @@ def _dataframe_shein(query: str, conn) -> "pd.DataFrame":
     return df
 
 
-def _gravar_excel_shein(df: "pd.DataFrame", caminho: str, nome_aba: str) -> None:
+def _gravar_excel_cliente_a(df: "pd.DataFrame", caminho: str, nome_aba: str) -> None:
     """Grava um DataFrame em Excel, dividindo em 'Parte 1'/'Parte 2' se
     passar do limite de linhas de uma aba (igual o notebook original)."""
     with pd.ExcelWriter(caminho, engine="xlsxwriter") as writer:
@@ -4899,45 +4972,45 @@ def _gravar_excel_shein(df: "pd.DataFrame", caminho: str, nome_aba: str) -> None
             df.to_excel(writer, sheet_name=nome_aba, index=False)
 
 
-def _gerar_relatorio_shein(data_str: str) -> dict:
-    """Gera os relatórios de Notas e Canceladas do Shein pra uma data
+def _gerar_relatorio_cliente_a(data_str: str) -> dict:
+    """Gera os relatórios de Notas e Canceladas do ClienteA pra uma data
     (formato YYYY-MM-DD). Retorna os nomes dos arquivos gerados (prontos
     pra download) e a contagem de linhas de cada um."""
     try:
         data = datetime.strptime(data_str, "%Y-%m-%d")
     except (ValueError, TypeError):
-        logger_shein.error("Data inválida recebida: %r", data_str)
+        logger_cliente_a.error("Data inválida recebida: %r", data_str)
         return {"ok": False, "erro": "Data inválida."}
 
-    logger_shein.info("Iniciando geração do relatório Shein pra %s.", data.strftime("%d-%m-%Y"))
+    logger_cliente_a.info("Iniciando geração do relatório ClienteA pra %s.", data.strftime("%d-%m-%Y"))
 
-    conn, erro = _conectar_shein()
+    conn, erro = _conectar_cliente_a()
     if erro:
-        logger_shein.error("Falha ao conectar no banco Shein: %s", erro)
+        logger_cliente_a.error("Falha ao conectar no banco ClienteA: %s", erro)
         return {"ok": False, "erro": erro}
 
     pasta = None
     try:
-        query_notas, query_canceladas = _construir_queries_shein(data)
-        df_notas = _dataframe_shein(query_notas, conn)
-        logger_shein.info("Query de Notas retornou %d linha(s).", len(df_notas))
-        df_canceladas = _dataframe_shein(query_canceladas, conn)
-        logger_shein.info("Query de Canceladas retornou %d linha(s).", len(df_canceladas))
+        query_notas, query_canceladas = _construir_queries_cliente_a(data)
+        df_notas = _dataframe_cliente_a(query_notas, conn)
+        logger_cliente_a.info("Query de Notas retornou %d linha(s).", len(df_notas))
+        df_canceladas = _dataframe_cliente_a(query_canceladas, conn)
+        logger_cliente_a.info("Query de Canceladas retornou %d linha(s).", len(df_canceladas))
 
         data_arquivo = data.strftime("%d-%m-%Y")
-        pasta = _pasta_saida_relatorios_shein(data)
+        pasta = _pasta_saida_relatorios_cliente_a(data)
         # padrão de nomenclatura pedido pelo cliente (voltou a como era antes
         # de 07/08): Notas sem prefixo nenhum, Canceladas só com "Canceladas_"
-        # na frente - sem "Shein_" em nenhum dos dois.
+        # na frente - sem "ClienteA_" em nenhum dos dois.
         nome_notas = f"{data_arquivo}.xlsx"
         nome_canceladas = f"Canceladas_{data_arquivo}.xlsx"
-        _gravar_excel_shein(df_notas, os.path.join(pasta, nome_notas), "Notas")
-        logger_shein.info("Arquivo '%s' gravado em %s.", nome_notas, pasta)
-        _gravar_excel_shein(df_canceladas, os.path.join(pasta, nome_canceladas), "Canceladas")
-        logger_shein.info("Arquivo '%s' gravado em %s.", nome_canceladas, pasta)
+        _gravar_excel_cliente_a(df_notas, os.path.join(pasta, nome_notas), "Notas")
+        logger_cliente_a.info("Arquivo '%s' gravado em %s.", nome_notas, pasta)
+        _gravar_excel_cliente_a(df_canceladas, os.path.join(pasta, nome_canceladas), "Canceladas")
+        logger_cliente_a.info("Arquivo '%s' gravado em %s.", nome_canceladas, pasta)
 
         logger.info(
-            "Relatório Shein gerado pra %s: %d notas, %d canceladas.",
+            "Relatório ClienteA gerado pra %s: %d notas, %d canceladas.",
             data_arquivo, len(df_notas), len(df_canceladas),
         )
         return {
@@ -4950,34 +5023,34 @@ def _gerar_relatorio_shein(data_str: str) -> dict:
     except PermissionError as e:
         # NÃO é erro de SharePoint (nem chegou perto disso ainda - a etapa
         # de upload só roda depois que esse retorno é bem-sucedido) - é
-        # permissão de escrita NA PASTA LOCAL relatorios_shein_saida,
+        # permissão de escrita NA PASTA LOCAL relatorios_cliente_a_saida,
         # mesma causa raiz do Errno 13 já visto no log do EmailPack:
         # a pasta/arquivo foi criado por outra sessão do Windows e o
         # usuário atual não tem permissão de gravação nela. Mensagem
         # separada da genérica abaixo pra não confundir com falha de
         # conexão/autenticação no Graph.
-        logger_shein.exception("Sem permissão pra gravar o relatório Shein localmente (pasta %s)", pasta)
+        logger_cliente_a.exception("Sem permissão pra gravar o relatório ClienteA localmente (pasta %s)", pasta)
         return {
             "ok": False,
             "erro": (
                 f"Sem permissão pra gravar o arquivo localmente: {e}. "
                 "Isso não é falha de conexão com o SharePoint - o problema é "
-                "de permissão NTFS na pasta relatorios_shein_saida (provavelmente "
+                "de permissão NTFS na pasta relatorios_cliente_a_saida (provavelmente "
                 "criada por outra sessão do Windows). Confira em Propriedades → "
                 "Segurança da pasta se o usuário que roda essa automação tem "
                 "permissão de Modificar."
             ),
         }
     except Exception as e:
-        logger_shein.exception("Erro ao gerar relatório Shein pra %s", data_str)
+        logger_cliente_a.exception("Erro ao gerar relatório ClienteA pra %s", data_str)
         return {"ok": False, "erro": str(e)}
     finally:
         fechar_conexao(conn)
-        logger_shein.info("Conexão com o banco Shein encerrada.")
+        logger_cliente_a.info("Conexão com o banco ClienteA encerrada.")
 
 
 # ---------------------------------------------------------------------------
-# Envio automático dos Relatórios Shein pro SharePoint - todos os dias às
+# Envio automático dos Relatórios ClienteA pro SharePoint - todos os dias às
 # 08:00, o relatório do dia anterior é gerado e enviado sozinho.
 # ---------------------------------------------------------------------------
 # ATENÇÃO - leia antes de confiar nisso:
@@ -5000,7 +5073,7 @@ def _gerar_relatorio_shein(data_str: str) -> dict:
 #   função só (`_obter_token_sharepoint`) exatamente pra isso ser fácil de
 #   trocar depois, se precisar.
 #
-#   Também não tenho como confirmar se a pasta "Relatorio_Shein" fica no
+#   Também não tenho como confirmar se a pasta "Relatorio_ClienteA" fica no
 #   OneDrive pessoal da conta de suporte ou num site de
 #   equipe do SharePoint - pela captura de tela que você mandou (o
 #   círculo com o nome "Suporte" no canto), parece OneDrive pessoal,
@@ -5022,14 +5095,14 @@ MESES_INGLES = {
     7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December",
 }
 
-HORARIO_RELATORIO_SHEIN_AUTOMATICO = "08:00"
+HORARIO_RELATORIO_CLIENTE_A_AUTOMATICO = "08:00"
 
-estado_relatorio_shein_automatico: dict = {
+estado_relatorio_cliente_a_automatico: dict = {
     "ultima_execucao": None,
     "ultimo_sucesso": None,
     "ultimo_erro": None,
 }
-_lock_relatorio_shein_auto = threading.Lock()
+_lock_relatorio_cliente_a_auto = threading.Lock()
 
 
 def _config_sharepoint() -> dict:
@@ -5088,7 +5161,7 @@ def _extrair_site_do_link_sharepoint(url: str):
     SharePoint/OneDrive, aceitando os formatos mais comuns que aparecem
     quando alguém copia o link direto da barra de endereço OU usa o botão
     "copiar link" da interface (que gera uma URL tipo
-    /shared?id=%2Fpersonal%2F...%2FRelatorio_Shein%2F... com o caminho
+    /shared?id=%2Fpersonal%2F...%2FRelatorio_ClienteA%2F... com o caminho
     real codificado dentro do parâmetro "id", em vez de aparecer direto
     no caminho da URL).
     Retorna (hostname, "sites", nome_do_site) pra site de equipe,
@@ -5199,7 +5272,7 @@ def _resolver_base_graph_drive(token: str, cfg: dict):
             dica_tipo_url = (
                 "\n\nATENÇÃO: a URL configurada em SHAREPOINT_SITE_URL foi reconhecida como "
                 "um link de OneDrive PESSOAL (contém '/personal/' na URL), não de um site de "
-                "equipe do SharePoint. Se a pasta 'Relatorio_Shein' na verdade fica dentro de "
+                "equipe do SharePoint. Se a pasta 'Relatorio_ClienteA' na verdade fica dentro de "
                 "um site de equipe (ex: um site chamado 'Suporte'), copie a URL de dentro "
                 "dessa pasta (que deve conter '/sites/' em vez de '/personal/', e o domínio "
                 "SEM o '-my') e cole em SHAREPOINT_SITE_URL no .env.sharepoint."
@@ -5211,7 +5284,7 @@ def _resolver_base_graph_drive(token: str, cfg: dict):
         "Isso costuma acontecer quando a conta de login é uma caixa de e-mail compartilhada "
         "(sem OneDrive próprio) e a URL/e-mail configurado em SHAREPOINT_SITE_URL ou "
         "SHAREPOINT_DRIVE_OWNER_EMAIL (.env.sharepoint) também não bateu. Confira se a URL "
-        "está exatamente certa (copiada da barra de endereço, com a pasta Relatorio_Shein "
+        "está exatamente certa (copiada da barra de endereço, com a pasta Relatorio_ClienteA "
         "aberta), ou se a conta de login tem permissão de acessar esse local."
         + dica_tipo_url
     )
@@ -5265,78 +5338,78 @@ def _enviar_arquivo_sharepoint(token: str, base: str, caminho_local: str, caminh
     return None
 
 
-def _enviar_relatorio_shein_sharepoint(data: datetime, nome_notas: str, nome_canceladas: str) -> dict:
+def _enviar_relatorio_cliente_a_sharepoint(data: datetime, nome_notas: str, nome_canceladas: str) -> dict:
     """Sobe os dois arquivos do relatório do dia pro SharePoint, seguindo a
-    estrutura Relatorio_Shein/<MêsEmInglês>/<DD-MM-YYYY>/ (mês sempre em
+    estrutura Relatorio_ClienteA/<MêsEmInglês>/<DD-MM-YYYY>/ (mês sempre em
     inglês, igual você mostrou na captura de tela - não depende do idioma
     configurado na máquina que roda isso)."""
-    logger_shein.info("Iniciando envio ao SharePoint pra %s.", data.strftime("%d-%m-%Y"))
+    logger_cliente_a.info("Iniciando envio ao SharePoint pra %s.", data.strftime("%d-%m-%Y"))
     cfg = _config_sharepoint()
 
     token, erro = _obter_token_sharepoint(cfg)
     if erro:
-        logger_shein.error("Falha ao autenticar no Microsoft Graph: %s", erro)
+        logger_cliente_a.error("Falha ao autenticar no Microsoft Graph: %s", erro)
         return {"ok": False, "erro": erro}
-    logger_shein.info("Autenticação no Microsoft Graph OK.")
+    logger_cliente_a.info("Autenticação no Microsoft Graph OK.")
 
     base, erro_drive = _resolver_base_graph_drive(token, cfg)
     if erro_drive:
-        logger_shein.error("Não foi possível resolver o drive do SharePoint: %s", erro_drive)
+        logger_cliente_a.error("Não foi possível resolver o drive do SharePoint: %s", erro_drive)
         return {"ok": False, "erro": erro_drive}
-    logger_shein.info("Drive resolvido: %s", base)
+    logger_cliente_a.info("Drive resolvido: %s", base)
 
-    pastas = ["Relatorio_Shein", MESES_INGLES[data.month], data.strftime("%d-%m-%Y")]
+    pastas = [_alias_real("Relatorio_ClienteA"), MESES_INGLES[data.month], data.strftime("%d-%m-%Y")]
     erro_pasta = _garantir_pasta_sharepoint(token, base, pastas)
     if erro_pasta:
-        logger_shein.error("Falha ao criar/conferir a pasta '%s': %s", "/".join(pastas), erro_pasta)
+        logger_cliente_a.error("Falha ao criar/conferir a pasta '%s': %s", "/".join(pastas), erro_pasta)
         return {"ok": False, "erro": erro_pasta}
-    logger_shein.info("Pasta '%s' confirmada no SharePoint.", "/".join(pastas))
+    logger_cliente_a.info("Pasta '%s' confirmada no SharePoint.", "/".join(pastas))
 
     caminho_pastas_str = "/".join(pastas)
-    pasta_local = _pasta_saida_relatorios_shein(data)
+    pasta_local = _pasta_saida_relatorios_cliente_a(data)
     for nome_arquivo in (nome_notas, nome_canceladas):
         erro_envio = _enviar_arquivo_sharepoint(
             token, base, os.path.join(pasta_local, nome_arquivo), f"{caminho_pastas_str}/{nome_arquivo}"
         )
         if erro_envio:
-            logger_shein.error("Falha ao enviar '%s': %s", nome_arquivo, erro_envio)
+            logger_cliente_a.error("Falha ao enviar '%s': %s", nome_arquivo, erro_envio)
             return {"ok": False, "erro": erro_envio}
-        logger_shein.info("Arquivo '%s' enviado com sucesso.", nome_arquivo)
+        logger_cliente_a.info("Arquivo '%s' enviado com sucesso.", nome_arquivo)
 
-    logger_shein.info("Envio ao SharePoint concluído com sucesso pra %s.", data.strftime("%d-%m-%Y"))
+    logger_cliente_a.info("Envio ao SharePoint concluído com sucesso pra %s.", data.strftime("%d-%m-%Y"))
     return {"ok": True}
 
 
-def _executar_relatorio_shein_diario() -> None:
+def _executar_relatorio_cliente_a_diario() -> None:
     """Roda 1x por dia (agendado via `schedule`, junto com os outros
     alertas): gera o relatório de ONTEM e envia pro SharePoint."""
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ontem = datetime.now() - timedelta(days=1)
-    logger_shein.info("=" * 60)
-    logger_shein.info("Execução automática diária iniciada (relatório de %s).", ontem.strftime("%d-%m-%Y"))
+    logger_cliente_a.info("=" * 60)
+    logger_cliente_a.info("Execução automática diária iniciada (relatório de %s).", ontem.strftime("%d-%m-%Y"))
     try:
-        resultado = _gerar_relatorio_shein(ontem.strftime("%Y-%m-%d"))
+        resultado = _gerar_relatorio_cliente_a(ontem.strftime("%Y-%m-%d"))
         if not resultado.get("ok"):
             raise RuntimeError(resultado.get("erro", "erro desconhecido ao gerar o relatório"))
 
-        resultado_envio = _enviar_relatorio_shein_sharepoint(
+        resultado_envio = _enviar_relatorio_cliente_a_sharepoint(
             ontem, resultado["arquivo_notas"], resultado["arquivo_canceladas"]
         )
         if not resultado_envio.get("ok"):
             raise RuntimeError(resultado_envio.get("erro", "erro desconhecido ao enviar pro SharePoint"))
 
-        with _lock_relatorio_shein_auto:
-            estado_relatorio_shein_automatico["ultima_execucao"] = agora
-            estado_relatorio_shein_automatico["ultimo_sucesso"] = agora
-            estado_relatorio_shein_automatico["ultimo_erro"] = None
-        logger_shein.info("Relatório Shein automático de %s enviado ao SharePoint.", ontem.strftime("%d-%m-%Y"))
-        logger_shein.info("Execução automática diária concluída com SUCESSO.")
+        with _lock_relatorio_cliente_a_auto:
+            estado_relatorio_cliente_a_automatico["ultima_execucao"] = agora
+            estado_relatorio_cliente_a_automatico["ultimo_sucesso"] = agora
+            estado_relatorio_cliente_a_automatico["ultimo_erro"] = None
+        logger_cliente_a.info("Relatório ClienteA automático de %s enviado ao SharePoint.", ontem.strftime("%d-%m-%Y"))
+        logger_cliente_a.info("Execução automática diária concluída com SUCESSO.")
     except Exception as e:
-        with _lock_relatorio_shein_auto:
-            estado_relatorio_shein_automatico["ultima_execucao"] = agora
-            estado_relatorio_shein_automatico["ultimo_erro"] = str(e)
-        logger.exception("Erro ao rodar o relatório Shein automático diário")
-        logger_shein.exception("Execução automática diária FALHOU.")
+        with _lock_relatorio_cliente_a_auto:
+            estado_relatorio_cliente_a_automatico["ultima_execucao"] = agora
+            estado_relatorio_cliente_a_automatico["ultimo_erro"] = str(e)
+        logger.exception("Erro ao rodar o relatório ClienteA automático diário")
+        logger_cliente_a.exception("Execução automática diária FALHOU.")
 
 
 
@@ -6477,7 +6550,7 @@ __NAVBAR__
       </a>
       __CARD_INDICADORES_MOVIDESK__
       __CARD_AUTOMACAO_MOVIDESK__
-      __CARD_RELATORIOS_SHEIN__
+      __CARD_RELATORIOS_CLIENTE_A__
       __CARD_DASH_FINANCEIRO__
       __CARD_MANUTENCAO_ALERTAS__
       __CARD_MANUTENCAO_REJEICOES__
@@ -6654,14 +6727,14 @@ _CARD_AUTOMACAO_MOVIDESK_HTML = """<a class="card-hub" href="/automacao-movidesk
         <p>Controle de sincronização - NOC, Satisfação, Uptime, GMUD, Jira e outras automações ainda em construção.</p>
       </a>"""
 
-_CARD_RELATORIOS_SHEIN_HTML = """<a class="card-hub" href="/relatorios-shein" style="--accent-card:#dcdcaa">
+_CARD_RELATORIOS_CLIENTE_A_HTML = """<a class="card-hub" href="/relatorios-cliente_a" style="--accent-card:#dcdcaa">
         <div class="icone" style="background:rgba(220,220,170,.15)">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/><path d="M2 20h20"/>
           </svg>
         </div>
-        <h2>Relatórios Shein</h2>
-        <p>Extração de relatórios de notas e canceladas do cliente Shein.</p>
+        <h2>Relatórios ClienteA</h2>
+        <p>Extração de relatórios de notas e canceladas do cliente ClienteA.</p>
       </a>"""
 
 _CARD_DASH_FINANCEIRO_HTML = """<a class="card-hub" href="/dash-financeiro" style="--accent-card:#dcdcaa">
@@ -6860,7 +6933,7 @@ def _montar_hub_html(sessao: dict) -> str:
         .replace("__PAGINA_DADOS_SENSIVEIS__", pagina_dados_sensiveis)
         .replace("__CARD_INDICADORES_MOVIDESK__", _CARD_INDICADORES_MOVIDESK_HTML if admin else "")
         .replace("__CARD_AUTOMACAO_MOVIDESK__", _CARD_AUTOMACAO_MOVIDESK_HTML if admin else "")
-        .replace("__CARD_RELATORIOS_SHEIN__", _CARD_RELATORIOS_SHEIN_HTML if _tem_acesso_relatorios_shein(sessao) else "")
+        .replace("__CARD_RELATORIOS_CLIENTE_A__", _CARD_RELATORIOS_CLIENTE_A_HTML if _tem_acesso_relatorios_cliente_a(sessao) else "")
         .replace("__CARD_DASH_FINANCEIRO__", _CARD_DASH_FINANCEIRO_HTML if _tem_acesso_dash_financeiro(sessao) else "")
         .replace("__CARD_MANUTENCAO_ALERTAS__", _CARD_MANUTENCAO_ALERTAS_HTML if _tem_acesso_manutencao_alertas(sessao) else "")
         .replace("__CARD_MANUTENCAO_REJEICOES__", _CARD_MANUTENCAO_REJEICOES_HTML if _tem_acesso_manutencao_rejeicoes(sessao) else "")
@@ -7059,8 +7132,8 @@ __NAVBAR__
         <label for="novo-pode-manutencao">Manutenção de Alertas em Banco</label>
       </div>
       <div class="campo-checkbox">
-        <input type="checkbox" id="novo-pode-shein">
-        <label for="novo-pode-shein">Relatórios Shein</label>
+        <input type="checkbox" id="novo-pode-cliente_a">
+        <label for="novo-pode-cliente_a">Relatórios ClienteA</label>
       </div>
       <div class="campo-checkbox">
         <input type="checkbox" id="novo-pode-dash">
@@ -7133,9 +7206,9 @@ __NAVBAR__
         <span id="nota-admin-pode_manutencao_alertas" class="nota-admin-perm" style="display:none">Sempre (admin)</span>
       </div>
       <div class="campo-checkbox">
-        <input type="checkbox" id="perm-pode_relatorios_shein">
-        <label for="perm-pode_relatorios_shein">Relatórios Shein</label>
-        <span id="nota-admin-pode_relatorios_shein" class="nota-admin-perm" style="display:none">Sempre (admin)</span>
+        <input type="checkbox" id="perm-pode_relatorios_cliente_a">
+        <label for="perm-pode_relatorios_cliente_a">Relatórios ClienteA</label>
+        <span id="nota-admin-pode_relatorios_cliente_a" class="nota-admin-perm" style="display:none">Sempre (admin)</span>
       </div>
       <div class="campo-checkbox">
         <input type="checkbox" id="perm-pode_dash_financeiro">
@@ -7508,7 +7581,7 @@ async function carregarUsuarios() {
 
 const ENDPOINTS_PERMISSOES = {
   pode_manutencao_alertas: '/api/usuarios/permissao-manutencao',
-  pode_relatorios_shein: '/api/usuarios/permissao-shein',
+  pode_relatorios_cliente_a: '/api/usuarios/permissao-cliente_a',
   pode_dash_financeiro: '/api/usuarios/permissao-dash-financeiro',
   pode_manutencao_rejeicoes: '/api/usuarios/permissao-manutencao-rejeicoes',
   pode_manutencao_relatorios: '/api/usuarios/permissao-manutencao-relatorios',
@@ -7637,7 +7710,7 @@ function abrirModalNovo() {
   document.getElementById('novo_senha_criar').value = '';
   document.getElementById('novo-papel').value = 'view';
   document.getElementById('novo-pode-manutencao').checked = false;
-  document.getElementById('novo-pode-shein').checked = false;
+  document.getElementById('novo-pode-cliente_a').checked = false;
   document.getElementById('novo-pode-dash').checked = false;
   document.getElementById('novo-pode-rejeicoes').checked = false;
   document.getElementById('novo-pode-relatorios').checked = false;
@@ -7656,7 +7729,7 @@ async function criarUsuario() {
   const senha = document.getElementById('novo_senha_criar').value;
   const papel = document.getElementById('novo-papel').value;
   const podeManutencao = document.getElementById('novo-pode-manutencao').checked;
-  const podeShein = document.getElementById('novo-pode-shein').checked;
+  const podeClienteA = document.getElementById('novo-pode-cliente_a').checked;
   const podeDash = document.getElementById('novo-pode-dash').checked;
   const podeRejeicoes = document.getElementById('novo-pode-rejeicoes').checked;
   const podeRelatorios = document.getElementById('novo-pode-relatorios').checked;
@@ -7672,7 +7745,7 @@ async function criarUsuario() {
     body: 'usuario=' + encodeURIComponent(usuario) + '&senha=' + encodeURIComponent(senha) +
           '&admin=' + (papel === 'admin' ? 'true' : 'false') +
           '&pode_manutencao_alertas=' + (podeManutencao ? 'true' : 'false') +
-          '&pode_relatorios_shein=' + (podeShein ? 'true' : 'false') +
+          '&pode_relatorios_cliente_a=' + (podeClienteA ? 'true' : 'false') +
           '&pode_dash_financeiro=' + (podeDash ? 'true' : 'false') +
           '&pode_manutencao_rejeicoes=' + (podeRejeicoes ? 'true' : 'false') +
           '&pode_manutencao_relatorios=' + (podeRelatorios ? 'true' : 'false') +
@@ -7782,7 +7855,7 @@ __NAVBAR__
       <button class="btn-accent" onclick="abrirModalNovaConexao()">+ Nova conexão</button>
     </div>
     <div class="sub-secao">
-      Strings de conexão reutilizáveis por cliente e produto (ex.: Vivo · NFCom, Nissei · NFe).
+      Strings de conexão reutilizáveis por cliente e produto (ex.: ClienteG · NFCom, ClienteE · NFe).
       Ficam disponíveis pra escolher na hora de criar ou editar um alerta em
       "Manutenção de Alertas em Banco", sem precisar digitar a conexão de novo toda vez.
     </div>
@@ -7800,7 +7873,7 @@ __NAVBAR__
     <div class="modal">
       <h3 id="titulo-modal-conexao">Nova String Connection</h3>
       <label>Cliente</label>
-      <input type="text" id="conexao-cliente" placeholder="Ex.: Vivo">
+      <input type="text" id="conexao-cliente" placeholder="Ex.: ClienteG">
       <label>Produto</label>
       <input type="text" id="conexao-produto" placeholder="Ex.: NFCom">
       <label>String de conexão</label>
@@ -8026,7 +8099,7 @@ __NAVBAR__
       </div>
       <div class="dica-cs">
         "origem" identifica de qual .env esse valor vem (ex.: "saas",
-        "sharepoint", "nissei-cte" - use o nome do arquivo .env.&lt;origem&gt;
+        "sharepoint", "cliente_e-cte" - use o nome do arquivo .env.&lt;origem&gt;
         sem o ".env." na frente). "campo" é o nome original da variável
         nesse arquivo (ex.: "db_password", "SHAREPOINT_PASSWORD").
       </div>
@@ -10292,7 +10365,7 @@ __NAVBAR__
               <h3>Permissões especiais</h3>
               <div class="grade-permissoes-mu">
                 <div class="campo-checkbox"><input type="checkbox" id="perm-pode_manutencao_alertas"><label style="margin:0; text-transform:none; font-size:12.5px">Manutenção de Alertas</label></div>
-                <div class="campo-checkbox"><input type="checkbox" id="perm-pode_relatorios_shein"><label style="margin:0; text-transform:none; font-size:12.5px">Relatórios Shein</label></div>
+                <div class="campo-checkbox"><input type="checkbox" id="perm-pode_relatorios_cliente_a"><label style="margin:0; text-transform:none; font-size:12.5px">Relatórios ClienteA</label></div>
                 <div class="campo-checkbox"><input type="checkbox" id="perm-pode_dash_financeiro"><label style="margin:0; text-transform:none; font-size:12.5px">Dash Financeiro</label></div>
                 <div class="campo-checkbox"><input type="checkbox" id="perm-pode_manutencao_rejeicoes"><label style="margin:0; text-transform:none; font-size:12.5px">Manutenção de Rejeições</label></div>
                 <div class="campo-checkbox"><input type="checkbox" id="perm-pode_manutencao_relatorios"><label style="margin:0; text-transform:none; font-size:12.5px">Manutenção de Relatórios</label></div>
@@ -10660,7 +10733,7 @@ function renderizarResultadoManutencaoUsuarios(dados) {
 // já usadas na tela Usuários (nada de lógica de permissão duplicada) -----
 const ENDPOINTS_PERMISSOES_MU = {
   pode_manutencao_alertas: '/api/usuarios/permissao-manutencao',
-  pode_relatorios_shein: '/api/usuarios/permissao-shein',
+  pode_relatorios_cliente_a: '/api/usuarios/permissao-cliente_a',
   pode_dash_financeiro: '/api/usuarios/permissao-dash-financeiro',
   pode_manutencao_rejeicoes: '/api/usuarios/permissao-manutencao-rejeicoes',
   pode_manutencao_relatorios: '/api/usuarios/permissao-manutencao-relatorios',
@@ -13655,6 +13728,7 @@ def _montar_dashboards_clientes_html(sessao: dict) -> str:
         .replace("__NAVBAR_CSS__", _NAVBAR_CSS)
         .replace("__NAVBAR__", _montar_navbar(sessao, "Dashboards por Cliente"))
         .replace("__FOOTER__", _montar_footer())
+        .replace("__CLIENTE_NFAG_DC__", _alias_real("ClienteB"))
     )
 
 
@@ -13697,7 +13771,7 @@ __NAVBAR_CSS__
   .placeholder-dc .icone-placeholder-dc { font-size: 40px; margin-bottom: 14px; }
   .placeholder-dc .titulo-placeholder-dc { font-size: 15px; color: var(--fg); font-weight: 700; margin-bottom: 6px; }
 
-  /* Dashboard Sanepar > NFAg - único já implementado de verdade */
+  /* Dashboard ClienteB > NFAg - único já implementado de verdade */
   .cabecalho-nfag-dc { display: flex; align-items: center; justify-content: space-between;
       background: #1E2A38; border-radius: 12px; padding: 14px 24px; margin-bottom: 18px; }
   .cabecalho-nfag-dc .logo-nfag-dc { height: 34px; width: auto; }
@@ -13750,7 +13824,7 @@ __NAVBAR__
       <div class="grade-selecao-dc" id="grade-produtos-dc"></div>
     </div>
 
-    <!-- Dashboard Sanepar > NFAg - transcrito do Power BI (08/09/2026),
+    <!-- Dashboard ClienteB > NFAg - transcrito do Power BI (08/09/2026),
          único já implementado de verdade por enquanto -->
     <div id="painel-dashboard-nfag-dc" style="display:none">
       <div class="cabecalho-nfag-dc">
@@ -13867,9 +13941,9 @@ function selecionarProdutoDC(produto) {
   document.querySelectorAll('#grade-produtos-dc .pill-dc').forEach(p => p.classList.toggle('ativa', p.dataset.produto === produto));
   document.getElementById('trilha-dc').innerHTML = `<span class="atual">${clienteSelecionadoDC}</span><span>·</span><span class="atual">${produto}</span>`;
 
-  // Sanepar > NFAg já tem dashboard de verdade (transcrito do Power BI) -
+  // ClienteB > NFAg já tem dashboard de verdade (transcrito do Power BI) -
   // qualquer outra combinação cliente/produto ainda cai no placeholder.
-  if (clienteSelecionadoDC === 'Sanepar' && produto === 'NFAg') {
+  if (clienteSelecionadoDC === '__CLIENTE_NFAG_DC__' && produto === 'NFAg') {
     document.getElementById('painel-iframe-dc').style.display = 'none';
     document.getElementById('painel-placeholder-dc').style.display = 'none';
     document.getElementById('painel-dashboard-nfag-dc').style.display = 'block';
@@ -13896,10 +13970,10 @@ function selecionarProdutoDC(produto) {
   document.getElementById('painel-placeholder-dc').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-// -- Dashboard Sanepar > NFAg - transcrito do Power BI (Indicadores_NFAg
-// _Sanepar.pbix) em 08/09/2026: mesma query nativa, mesmas medidas DAX
+// -- Dashboard ClienteB > NFAg - transcrito do Power BI (Indicadores_NFAg
+// _ClienteB.pbix) em 08/09/2026: mesma query nativa, mesmas medidas DAX
 // (Status Descricao, Qtd Integradas/Última Hora/Autorizadas/Rejeitadas),
-// calculadas em Python no backend (ver _consultar_dashboard_sanepar_nfag).
+// calculadas em Python no backend (ver _consultar_dashboard_cliente_b_nfag).
 let graficoStatusNfagDC = null;
 let graficoHoraNfagDC = null;
 
@@ -13909,7 +13983,7 @@ async function carregarDashboardNfag() {
   const erroEl = document.getElementById('nfag-erro-dc');
   erroEl.innerText = '';
 
-  let url = '/api/dashboards-clientes/sanepar/nfag';
+  let url = '/api/dashboards-clientes/cliente_b/nfag';
   const parametros = [];
   if (dataInicio) parametros.push('data_inicio=' + encodeURIComponent(dataInicio));
   if (dataFim) parametros.push('data_fim=' + encodeURIComponent(dataFim));
@@ -14086,7 +14160,7 @@ __NAVBAR__
         <li>Execução e acompanhamento dos alertas fiscais automáticos</li>
         <li>Monitoramento de contingências SEFAZ por estado, com aviso automático no Teams</li>
         <li>Indicadores, apontamentos e sincronização com o Movidesk</li>
-        <li>Relatórios do cliente Shein (geração, download, envio automático)</li>
+        <li>Relatórios do cliente ClienteA (geração, download, envio automático)</li>
         <li>Atualização mensal do Dash Financeiro pro Power BI</li>
         <li>Manutenção de alertas, rejeições e relatórios direto no banco de monitoramento</li>
         <li>Monitoramento dos logs do EmailPack por e-mail processado, com aviso automático no Teams</li>
@@ -14125,71 +14199,71 @@ def _montar_sobre_html(sessao: dict) -> str:
     )
 
 
-_RELATORIOS_SHEIN_HTML_TEMPLATE = """<!DOCTYPE html>
+_RELATORIOS_CLIENTE_A_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="pt-br">
 <head>
 <meta charset="utf-8">
-<title>Relatórios Shein</title>
+<title>Relatórios ClienteA</title>
 <link rel="icon" type="image/png" href="__FAVICON__">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 __NAVBAR_CSS__
-  .painel-shein { background: var(--bg-panel); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  .painel-cliente_a { background: var(--bg-panel); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
                   border: 1px solid var(--border); border-radius: 16px; padding: 28px 30px;
                   max-width: 620px; margin: 0 auto; }
-  .painel-shein h2 { margin: 0 0 6px 0; font-size: 16px; color: var(--teal); }
-  .painel-shein .sub-shein { color: var(--fg-dim); font-size: 12.5px; line-height: 1.6; margin-bottom: 22px; }
-  .painel-shein label { display: block; font-size: 11px; color: var(--fg-dim); margin: 0 0 6px 0;
+  .painel-cliente_a h2 { margin: 0 0 6px 0; font-size: 16px; color: var(--teal); }
+  .painel-cliente_a .sub-cliente_a { color: var(--fg-dim); font-size: 12.5px; line-height: 1.6; margin-bottom: 22px; }
+  .painel-cliente_a label { display: block; font-size: 11px; color: var(--fg-dim); margin: 0 0 6px 0;
                          text-transform: uppercase; letter-spacing: .04em; }
-  .painel-shein input[type="date"] { width: 100%; padding: 10px 12px; border-radius: 8px;
+  .painel-cliente_a input[type="date"] { width: 100%; padding: 10px 12px; border-radius: 8px;
                                        border: 1px solid var(--border); background: rgba(0,0,0,.28);
                                        color: var(--fg); font-size: 14px; }
-  .painel-shein input[type="date"]:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(45,184,207,.16); }
-  .painel-shein button.btn-accent { width: 100%; margin-top: 18px; padding: 12px; font-size: 14px; }
-  .erro-shein { color: var(--erro); font-size: 12.5px; margin-top: 14px; text-align: center; min-height: 14px; }
-  .carregando-shein { display: none; text-align: center; color: var(--fg-dim); font-size: 12.5px; margin-top: 16px; }
+  .painel-cliente_a input[type="date"]:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(45,184,207,.16); }
+  .painel-cliente_a button.btn-accent { width: 100%; margin-top: 18px; padding: 12px; font-size: 14px; }
+  .erro-cliente_a { color: var(--erro); font-size: 12.5px; margin-top: 14px; text-align: center; min-height: 14px; }
+  .carregando-cliente_a { display: none; text-align: center; color: var(--fg-dim); font-size: 12.5px; margin-top: 16px; }
   .btn-secundario { width: 100%; margin-top: 8px; padding: 11px; font-size: 13.5px; border-radius: 8px;
                      background: rgba(255,255,255,.04); color: var(--fg); border: 1px solid var(--border-forte);
                      cursor: pointer; transition: background .15s, border-color .15s; }
   .btn-secundario:hover { background: rgba(255,255,255,.08); border-color: var(--teal); }
-  .carregando-shein.visivel { display: block; }
-  .spinner-shein { width: 22px; height: 22px; border: 3px solid rgba(45,184,207,.2); border-top-color: var(--teal);
+  .carregando-cliente_a.visivel { display: block; }
+  .spinner-cliente_a { width: 22px; height: 22px; border: 3px solid rgba(45,184,207,.2); border-top-color: var(--teal);
                     border-radius: 50%; margin: 0 auto 10px auto; animation: girar-spinner 0.8s linear infinite; }
   @keyframes girar-spinner { to { transform: rotate(360deg); } }
 
-  .resultado-shein { display: none; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
-  .resultado-shein.visivel { display: block; }
-  .resultado-shein .linha-resultado { display: flex; justify-content: space-between; align-items: center;
+  .resultado-cliente_a { display: none; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+  .resultado-cliente_a.visivel { display: block; }
+  .resultado-cliente_a .linha-resultado { display: flex; justify-content: space-between; align-items: center;
                     background: rgba(0,0,0,.2); border: 1px solid var(--border); border-radius: 10px;
                     padding: 12px 16px; margin-bottom: 10px; }
-  .resultado-shein .linha-resultado .info-arquivo { font-size: 13px; }
-  .resultado-shein .linha-resultado .info-arquivo .contagem { color: var(--fg-dim); font-size: 11.5px; margin-top: 2px; }
+  .resultado-cliente_a .linha-resultado .info-arquivo { font-size: 13px; }
+  .resultado-cliente_a .linha-resultado .info-arquivo .contagem { color: var(--fg-dim); font-size: 11.5px; margin-top: 2px; }
 </style>
 </head>
 <body>
 __NAVBAR__
   <div class="conteudo">
-    <div class="painel-shein">
-      <h2>Relatórios Shein</h2>
-      <div class="sub-shein">
-        Gera os relatórios de Notas e Canceladas (CTe) do cliente Shein pra
+    <div class="painel-cliente_a">
+      <h2>Relatórios ClienteA</h2>
+      <div class="sub-cliente_a">
+        Gera os relatórios de Notas e Canceladas (CTe) do cliente ClienteA pra
         uma data específica, direto do banco de produção. Pode demorar um
         pouco dependendo do volume do dia.
       </div>
 
       <label>Data</label>
-      <input type="date" id="shein-data">
+      <input type="date" id="cliente_a-data">
 
-      <button class="btn-accent" onclick="gerarRelatorioShein()">Gerar relatório</button>
+      <button class="btn-accent" onclick="gerarRelatorioClienteA()">Gerar relatório</button>
 
-      <div class="carregando-shein" id="carregando-shein">
-        <div class="spinner-shein"></div>
+      <div class="carregando-cliente_a" id="carregando-cliente_a">
+        <div class="spinner-cliente_a"></div>
         Consultando o banco e montando as planilhas...
       </div>
 
-      <div class="erro-shein" id="erro-shein"></div>
+      <div class="erro-cliente_a" id="erro-cliente_a"></div>
 
-      <div class="resultado-shein" id="resultado-shein">
+      <div class="resultado-cliente_a" id="resultado-cliente_a">
         <div class="linha-resultado">
           <div class="info-arquivo">
             Notas
@@ -14206,40 +14280,40 @@ __NAVBAR__
       </div>
     </div>
 
-    <div class="painel-shein" style="margin-top:20px">
+    <div class="painel-cliente_a" style="margin-top:20px">
       <h2>Baixar relatório já gerado</h2>
-      <div class="sub-shein">
+      <div class="sub-cliente_a">
         Se o relatório de um dia já foi gerado antes (manualmente ou pelo
         envio automático das 08:00), baixa direto sem precisar consultar o
         banco de novo - vai pra pasta Downloads do navegador.
       </div>
 
       <label>Data</label>
-      <input type="date" id="shein-data-baixar">
+      <input type="date" id="cliente_a-data-baixar">
 
       <button class="btn-secundario" onclick="baixarRelatorioExistente()">Baixar relatório do dia</button>
 
-      <div class="erro-shein" id="erro-shein-baixar"></div>
+      <div class="erro-cliente_a" id="erro-cliente_a-baixar"></div>
     </div>
 
-    <div class="painel-shein" style="margin-top:20px">
+    <div class="painel-cliente_a" style="margin-top:20px">
       <h2>Envio automático diário</h2>
-      <div class="sub-shein">
+      <div class="sub-cliente_a">
         Todos os dias às __HORARIO_AUTOMATICO__, o relatório do dia anterior é
         gerado e enviado sozinho pro SharePoint
-        (Relatorio_Shein/&lt;Mês&gt;/&lt;DD-MM-AAAA&gt;).
+        (Relatorio_ClienteA/&lt;Mês&gt;/&lt;DD-MM-AAAA&gt;).
       </div>
-      <div id="status-automatico-shein" style="font-size:12.5px; color:var(--fg-dim); margin-bottom:14px;">Carregando status...</div>
+      <div id="status-automatico-cliente_a" style="font-size:12.5px; color:var(--fg-dim); margin-bottom:14px;">Carregando status...</div>
       <button onclick="forcarRelatorioAutomatico()">Testar envio automático agora</button>
-      <button onclick="alternarLogShein()" id="botao-log-shein" style="margin-left:8px">Ver log isolado</button>
-      <div id="log-shein-container" style="display:none; margin-top:14px;">
+      <button onclick="alternarLogClienteA()" id="botao-log-cliente_a" style="margin-left:8px">Ver log isolado</button>
+      <div id="log-cliente_a-container" style="display:none; margin-top:14px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
           <span style="font-size:11px; color:var(--fg-dim); text-transform:uppercase; letter-spacing:.04em;">
-            Últimas linhas de shein_relatorios.log
+            Últimas linhas de cliente_a_relatorios.log
           </span>
-          <button onclick="carregarLogShein()" class="btn-mini">Atualizar</button>
+          <button onclick="carregarLogClienteA()" class="btn-mini">Atualizar</button>
         </div>
-        <pre id="log-shein-conteudo" style="background:rgba(0,0,0,.35); border:1px solid var(--border);
+        <pre id="log-cliente_a-conteudo" style="background:rgba(0,0,0,.35); border:1px solid var(--border);
              border-radius:8px; padding:12px 14px; max-height:360px; overflow-y:auto; font-size:11px;
              font-family:Consolas,monospace; color:var(--fg-dim); white-space:pre-wrap; word-break:break-word;
              margin:0;">Carregando...</pre>
@@ -14254,15 +14328,15 @@ __NAVBAR__
   const hoje = new Date();
   const ontem = new Date(hoje);
   ontem.setDate(hoje.getDate() - 1);
-  document.getElementById('shein-data').value = ontem.toISOString().slice(0, 10);
+  document.getElementById('cliente_a-data').value = ontem.toISOString().slice(0, 10);
 })();
 
-async function carregarStatusAutomaticoShein() {
+async function carregarStatusAutomaticoClienteA() {
   try {
-    const resp = await fetch('/api/relatorios-shein/status');
+    const resp = await fetch('/api/relatorios-cliente_a/status');
     if (resp.status === 401) { window.location.href = '/login'; return; }
     const dados = await resp.json();
-    const el = document.getElementById('status-automatico-shein');
+    const el = document.getElementById('status-automatico-cliente_a');
     if (!dados.ultima_execucao) {
       el.innerText = 'Ainda não rodou nesta execução do programa.';
     } else if (dados.ultimo_erro) {
@@ -14271,33 +14345,33 @@ async function carregarStatusAutomaticoShein() {
       el.innerHTML = '<span style="color:var(--ok)">✓ Último envio bem-sucedido: ' + dados.ultimo_sucesso + '</span>';
     }
   } catch (e) {
-    document.getElementById('status-automatico-shein').innerText = 'Erro ao consultar status: ' + e;
+    document.getElementById('status-automatico-cliente_a').innerText = 'Erro ao consultar status: ' + e;
   }
 }
 
 async function forcarRelatorioAutomatico() {
-  const resp = await fetch('/api/relatorios-shein/forcar-automatico', { method: 'POST' });
+  const resp = await fetch('/api/relatorios-cliente_a/forcar-automatico', { method: 'POST' });
   if (resp.status === 401) { window.location.href = '/login'; return; }
-  document.getElementById('status-automatico-shein').innerText = 'Disparado - rodando em segundo plano, atualize em alguns instantes...';
-  setTimeout(carregarStatusAutomaticoShein, 4000);
+  document.getElementById('status-automatico-cliente_a').innerText = 'Disparado - rodando em segundo plano, atualize em alguns instantes...';
+  setTimeout(carregarStatusAutomaticoClienteA, 4000);
   setTimeout(() => {
-    if (document.getElementById('log-shein-container').style.display !== 'none') carregarLogShein();
+    if (document.getElementById('log-cliente_a-container').style.display !== 'none') carregarLogClienteA();
   }, 4000);
 }
 
-let logSheinVisivel = false;
-function alternarLogShein() {
-  logSheinVisivel = !logSheinVisivel;
-  document.getElementById('log-shein-container').style.display = logSheinVisivel ? 'block' : 'none';
-  document.getElementById('botao-log-shein').innerText = logSheinVisivel ? 'Esconder log isolado' : 'Ver log isolado';
-  if (logSheinVisivel) carregarLogShein();
+let logClienteAVisivel = false;
+function alternarLogClienteA() {
+  logClienteAVisivel = !logClienteAVisivel;
+  document.getElementById('log-cliente_a-container').style.display = logClienteAVisivel ? 'block' : 'none';
+  document.getElementById('botao-log-cliente_a').innerText = logClienteAVisivel ? 'Esconder log isolado' : 'Ver log isolado';
+  if (logClienteAVisivel) carregarLogClienteA();
 }
 
-async function carregarLogShein() {
-  const el = document.getElementById('log-shein-conteudo');
+async function carregarLogClienteA() {
+  const el = document.getElementById('log-cliente_a-conteudo');
   el.innerText = 'Carregando...';
   try {
-    const resp = await fetch('/api/relatorios-shein/log');
+    const resp = await fetch('/api/relatorios-cliente_a/log');
     if (resp.status === 401) { window.location.href = '/login'; return; }
     const dados = await resp.json();
     if (!dados.ok) { el.innerText = 'Erro: ' + dados.erro; return; }
@@ -14312,12 +14386,12 @@ async function carregarLogShein() {
   }
 }
 
-carregarStatusAutomaticoShein();
-async function gerarRelatorioShein() {
-  const data = document.getElementById('shein-data').value;
-  const erroEl = document.getElementById('erro-shein');
-  const carregandoEl = document.getElementById('carregando-shein');
-  const resultadoEl = document.getElementById('resultado-shein');
+carregarStatusAutomaticoClienteA();
+async function gerarRelatorioClienteA() {
+  const data = document.getElementById('cliente_a-data').value;
+  const erroEl = document.getElementById('erro-cliente_a');
+  const carregandoEl = document.getElementById('carregando-cliente_a');
+  const resultadoEl = document.getElementById('resultado-cliente_a');
   erroEl.innerText = '';
   resultadoEl.classList.remove('visivel');
 
@@ -14328,7 +14402,7 @@ async function gerarRelatorioShein() {
 
   carregandoEl.classList.add('visivel');
   try {
-    const resp = await fetch('/api/relatorios-shein/gerar', {
+    const resp = await fetch('/api/relatorios-cliente_a/gerar', {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body: 'data=' + encodeURIComponent(data),
@@ -14346,7 +14420,7 @@ async function gerarRelatorioShein() {
     document.getElementById('contagem-canceladas').innerText = dados.linhas_canceladas + ' linha(s)';
     const [ano, mes, dia] = data.split('-');
     const dataArquivo = dia + '-' + mes + '-' + ano;
-    document.getElementById('link-zip-gerado').href = '/api/relatorios-shein/download-zip/' + encodeURIComponent(dataArquivo);
+    document.getElementById('link-zip-gerado').href = '/api/relatorios-cliente_a/download-zip/' + encodeURIComponent(dataArquivo);
     resultadoEl.classList.add('visivel');
   } catch (e) {
     carregandoEl.classList.remove('visivel');
@@ -14355,8 +14429,8 @@ async function gerarRelatorioShein() {
 }
 
 async function baixarRelatorioExistente() {
-  const data = document.getElementById('shein-data-baixar').value;
-  const erroEl = document.getElementById('erro-shein-baixar');
+  const data = document.getElementById('cliente_a-data-baixar').value;
+  const erroEl = document.getElementById('erro-cliente_a-baixar');
   erroEl.innerText = '';
   erroEl.style.color = '';
   if (!data) {
@@ -14364,7 +14438,7 @@ async function baixarRelatorioExistente() {
     return;
   }
   try {
-    const resp = await fetch('/api/relatorios-shein/existe?data=' + encodeURIComponent(data));
+    const resp = await fetch('/api/relatorios-cliente_a/existe?data=' + encodeURIComponent(data));
     if (resp.status === 401) { window.location.href = '/login'; return; }
     const dados = await resp.json();
     if (!dados.ok) {
@@ -14380,7 +14454,7 @@ async function baixarRelatorioExistente() {
     const [ano, mes, dia] = data.split('-');
     const dataArquivo = dia + '-' + mes + '-' + ano;
     const link = document.createElement('a');
-    link.href = '/api/relatorios-shein/download-zip/' + encodeURIComponent(dataArquivo);
+    link.href = '/api/relatorios-cliente_a/download-zip/' + encodeURIComponent(dataArquivo);
     link.download = dataArquivo + '.zip';
     document.body.appendChild(link);
     link.click();
@@ -14399,13 +14473,13 @@ async function baixarRelatorioExistente() {
 """
 
 
-def _montar_relatorios_shein_html(sessao: dict) -> str:
+def _montar_relatorios_cliente_a_html(sessao: dict) -> str:
     return (
-        _RELATORIOS_SHEIN_HTML_TEMPLATE
+        _RELATORIOS_CLIENTE_A_HTML_TEMPLATE
         .replace("__NAVBAR_CSS__", _NAVBAR_CSS)
-        .replace("__NAVBAR__", _montar_navbar(sessao, "Relatórios Shein"))
+        .replace("__NAVBAR__", _montar_navbar(sessao, "Relatórios ClienteA"))
         .replace("__FOOTER__", _montar_footer())
-        .replace("__HORARIO_AUTOMATICO__", HORARIO_RELATORIO_SHEIN_AUTOMATICO)
+        .replace("__HORARIO_AUTOMATICO__", HORARIO_RELATORIO_CLIENTE_A_AUTOMATICO)
     )
 
 
@@ -14747,7 +14821,7 @@ setInterval(carregarContingencias, 5000);
 for _nome_template in (
     "_HTML_PAGE", "_LOGIN_HTML_TEMPLATE", "_ALTERAR_SENHA_HTML_TEMPLATE",
     "_HUB_HTML_TEMPLATE", "_USUARIOS_NEGADO_TEMPLATE", "_USUARIOS_HTML_TEMPLATE",
-    "_MANUTENCAO_ALERTAS_HTML_TEMPLATE", "_MANUTENCAO_REJEICOES_HTML_TEMPLATE", "_MANUTENCAO_RELATORIOS_HTML_TEMPLATE", "_SOBRE_HTML_TEMPLATE", "_RELATORIOS_SHEIN_HTML_TEMPLATE",
+    "_MANUTENCAO_ALERTAS_HTML_TEMPLATE", "_MANUTENCAO_REJEICOES_HTML_TEMPLATE", "_MANUTENCAO_RELATORIOS_HTML_TEMPLATE", "_SOBRE_HTML_TEMPLATE", "_RELATORIOS_CLIENTE_A_HTML_TEMPLATE",
     "_CONTINGENCIAS_HTML_TEMPLATE", "_STRING_CONNECTIONS_HTML_TEMPLATE", "_INDICADORES_MOVIDESK_HTML_TEMPLATE",
     "_HORAS_TRABALHADAS_HTML_TEMPLATE", "_AUTOMACAO_MOVIDESK_HTML_TEMPLATE", "_DASH_FINANCEIRO_HTML_TEMPLATE",
     "_LOGS_HTML_TEMPLATE", "_MANUTENCAO_USUARIOS_HTML_TEMPLATE",
@@ -14799,13 +14873,13 @@ def _usuarios_web_padrao() -> dict:
                        "(troque em Alterar senha; defina PDA_ADMIN_SENHA_INICIAL pra escolher a sua).", senha)
     return {
         "admin": {"senha": senha, "nome": "Administrador", "admin": True, "pode_manutencao_alertas": True,
-                  "pode_relatorios_shein": True, "pode_dash_financeiro": True, "pode_manutencao_rejeicoes": True,
+                  "pode_relatorios_cliente_a": True, "pode_dash_financeiro": True, "pode_manutencao_rejeicoes": True,
                   "pode_dados_sensiveis": True, "pode_manutencao_relatorios": True, "pode_manutencao_usuarios": True,
                   "ativo": True, "atribuicao": "Suporte", "genero": ""},
     }
 
 DURACAO_INATIVIDADE_MINUTOS = 90  # desconecta depois de 90 min sem atividade real do usuário
-SESSIONS: dict = {}  # token -> {"usuario": str, "admin": bool, "pode_manutencao_alertas": bool, "pode_relatorios_shein": bool, "pode_dash_financeiro": bool, "pode_manutencao_rejeicoes": bool, "pode_dados_sensiveis": bool, "pode_manutencao_relatorios": bool, "pode_manutencao_usuarios": bool, "expira": datetime}
+SESSIONS: dict = {}  # token -> {"usuario": str, "admin": bool, "pode_manutencao_alertas": bool, "pode_relatorios_cliente_a": bool, "pode_dash_financeiro": bool, "pode_manutencao_rejeicoes": bool, "pode_dados_sensiveis": bool, "pode_manutencao_relatorios": bool, "pode_manutencao_usuarios": bool, "expira": datetime}
 
 
 def _caminho_usuarios_json() -> str:
@@ -14821,8 +14895,14 @@ def _carregar_usuarios() -> dict:
             # compatibilidade com usuarios.json de versões anteriores, que
             # não tinham esses campos ainda - assume sem a permissão extra
             for login, info in dados.items():
+                # chaves de permissão gravadas com o nome real do cliente (antes dos
+                # pseudônimos) migram sozinhas pra chave nova, sem perder o acesso
+                for chave_antiga in [k for k in info if k.startswith("pode_")]:
+                    chave_nova = _real_alias(chave_antiga)
+                    if chave_nova != chave_antiga and chave_nova not in info:
+                        info[chave_nova] = info.pop(chave_antiga)
                 info.setdefault("pode_manutencao_alertas", False)
-                info.setdefault("pode_relatorios_shein", False)
+                info.setdefault("pode_relatorios_cliente_a", False)
                 info.setdefault("pode_dash_financeiro", False)
                 info.setdefault("pode_manutencao_rejeicoes", False)
                 info.setdefault("pode_manutencao_relatorios", False)
@@ -15256,7 +15336,7 @@ def _periodos_se_sobrepoem(inicio1: str, fim1: str, inicio2: str, fim2: str) -> 
 
 # ---------------------------------------------------------------------------
 # String Connections - registro de strings de conexão reutilizáveis, por
-# cliente + produto (ex.: "Vivo" + "NFCom", "Nissei" + "NFe"). Usado na
+# cliente + produto (ex.: "ClienteG" + "NFCom", "ClienteE" + "NFe"). Usado na
 # Manutenção de Alertas em Banco pra não precisar digitar/colar a mesma
 # string de conexão toda vez que um novo alerta é criado pro mesmo cliente -
 # só admin mexe aqui, mas qualquer pessoa com acesso à Manutenção de Alertas
@@ -15454,7 +15534,7 @@ def _manutencao_usuarios_load_env(area: str) -> dict:
 def _manutencao_usuarios_credenciais(area: str, tenant: str) -> list:
     """Devolve uma LISTA de candidatos de conexão pro tenant - normalmente
     só 1 (o principal), mas pode ter um 2º candidato "_fallback" (ex.:
-    tenant com 2 servidores válidos, caso do accor em 04/09/2026 - pedido
+    tenant com 2 servidores válidos, caso do cliente_d em 04/09/2026 - pedido
     do solicitante) que só é tentado se o principal falhar ao conectar."""
     env = _manutencao_usuarios_load_env(area)
 
@@ -16176,7 +16256,7 @@ def _manutencao_usuarios_execute_pda_login(action: str, usuario_pda: str, nome: 
             return {**linha_base, "status": "skipped", "message": "Senha do login PDA precisa ter ao menos 4 caracteres."}
         USUARIOS_WEB[usuario_pda] = {
             "senha": senha_pda, "nome": nome, "admin": False,
-            "pode_manutencao_alertas": False, "pode_relatorios_shein": False, "pode_dash_financeiro": False,
+            "pode_manutencao_alertas": False, "pode_relatorios_cliente_a": False, "pode_dash_financeiro": False,
             "pode_manutencao_rejeicoes": False, "pode_dados_sensiveis": False, "pode_manutencao_relatorios": False,
             "pode_manutencao_usuarios": False, "ativo": True, "atribuicao": "Suporte", "genero": "",
         }
@@ -16405,7 +16485,7 @@ def _manutencao_usuarios_executar(
 
 def _criar_sessao(
     usuario: str, admin: bool, pode_manutencao_alertas: bool = False,
-    pode_relatorios_shein: bool = False, pode_dash_financeiro: bool = False,
+    pode_relatorios_cliente_a: bool = False, pode_dash_financeiro: bool = False,
     pode_manutencao_rejeicoes: bool = False, pode_dados_sensiveis: bool = False,
     pode_manutencao_relatorios: bool = False, pode_manutencao_usuarios: bool = False,
     nome: str = None, genero: str = "",
@@ -16417,7 +16497,7 @@ def _criar_sessao(
         "genero": genero or "",
         "admin": admin,
         "pode_manutencao_alertas": pode_manutencao_alertas,
-        "pode_relatorios_shein": pode_relatorios_shein,
+        "pode_relatorios_cliente_a": pode_relatorios_cliente_a,
         "pode_dash_financeiro": pode_dash_financeiro,
         "pode_manutencao_rejeicoes": pode_manutencao_rejeicoes,
         "pode_dados_sensiveis": pode_dados_sensiveis,
@@ -16454,11 +16534,11 @@ def _tem_acesso_manutencao_alertas(sessao: dict) -> bool:
     return bool(sessao.get("admin")) or bool(sessao.get("pode_manutencao_alertas"))
 
 
-def _tem_acesso_relatorios_shein(sessao: dict) -> bool:
+def _tem_acesso_relatorios_cliente_a(sessao: dict) -> bool:
     """Mesma ideia de _tem_acesso_manutencao_alertas, mas pro card de
-    Relatórios Shein - admin por padrão, liberável por pessoa na aba
+    Relatórios ClienteA - admin por padrão, liberável por pessoa na aba
     Usuários."""
-    return bool(sessao.get("admin")) or bool(sessao.get("pode_relatorios_shein"))
+    return bool(sessao.get("admin")) or bool(sessao.get("pode_relatorios_cliente_a"))
 
 
 def _tem_acesso_dash_financeiro(sessao: dict) -> bool:
@@ -16509,7 +16589,7 @@ def _caminho_dashboards_clientes_json() -> str:
 
 
 def _carregar_dashboards_clientes() -> dict:
-    """Cliente -> lista de produtos - dados semente (Sanepar/Vivo) só pra
+    """Cliente -> lista de produtos - dados semente (ClienteB/ClienteG) só pra
     ter uma base visual enquanto o dashboard de verdade não é construído
     (card em Beta). Devolve {} se o arquivo não existir/estiver
     corrompido, em vez de quebrar a página."""
@@ -16526,12 +16606,12 @@ def _carregar_dashboards_clientes() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Dashboard Sanepar > NFAg - transcrito do Power BI (Indicadores_NFAg_Sanepar
+# Dashboard ClienteB > NFAg - transcrito do Power BI (Indicadores_NFAg_ClienteB
 # .pbix) em 08/09/2026, a pedido do solicitante. Mesma lógica de negócio das
 # medidas DAX originais (ver 02_medidas_dax.txt que ele mandou), só que
 # calculada em Python a partir da mesma query SQL nativa do PBIX.
 # ---------------------------------------------------------------------------
-NFAG_SANEPAR_CNPJ = "76484013000145"
+NFAG_CLIENTE_B_CNPJ = os.environ.get("PDA_CNPJ_NFAG_CLIENTE_B", "")  # CNPJ do cliente vem do ambiente, nunca do código
 
 # Mesmo SWITCH(TRUE(), ...) da coluna calculada "Status Descricao" do PBIX -
 # tradução direta, IND_STATUS -> rótulo (ordem importa: 1 e 2 caem no
@@ -16557,28 +16637,28 @@ def _status_descricao_nfag(ind_status) -> str:
         return "Outros / Não mapeado"
 
 
-def _config_dashboard_sanepar_nfag() -> dict:
+def _config_dashboard_cliente_b_nfag() -> dict:
     """CREDENCIAIS_CENTRALIZADAS.env primeiro (seção
-    [dashboard_sanepar_nfag]), cai pro .env.dashboard_sanepar_nfag
+    [dashboard_cliente_b_nfag]), cai pro .env.dashboard_cliente_b_nfag
     tradicional se essa seção não existir (ver core/config_central.py)."""
     valores = _obter_config_hibrido(
-        "dashboard_sanepar_nfag", ".env.dashboard_sanepar_nfag",
+        "dashboard_cliente_b_nfag", ".env.dashboard_cliente_b_nfag",
         ["db_server", "db_name", "db_user", "db_password"],
     )
     return {
         "server": valores["db_server"],
         "database": valores["db_name"],
         "username": valores["db_user"],
-        "password": _obter_valor_config("dashboard_sanepar_nfag::db_password", valores["db_password"]),
+        "password": _obter_valor_config("dashboard_cliente_b_nfag::db_password", valores["db_password"]),
     }
 
 
-def _consultar_dashboard_sanepar_nfag(data_inicio: Optional[str], data_fim: Optional[str]) -> dict:
+def _consultar_dashboard_cliente_b_nfag(data_inicio: Optional[str], data_fim: Optional[str]) -> dict:
     """Mesma query nativa do PBIX (mesmo WHERE por CNPJ), com filtro de
     data OPCIONAL por cima (equivalente ao slicer "Entre" do relatório
     original) - devolve {"ok": True, ...} com tudo que os visuais do
     PBIX precisam, ou {"ok": False, "erro": str}."""
-    cfg = _config_dashboard_sanepar_nfag()
+    cfg = _config_dashboard_cliente_b_nfag()
     if not cfg["password"] or cfg["password"] == "PREENCHER_SENHA_AQUI":
         return {"ok": False, "erro": "Credencial do banco nfagpack_homol ainda não configurada (db_password em branco)."}
 
@@ -16586,7 +16666,7 @@ def _consultar_dashboard_sanepar_nfag(data_inicio: Optional[str], data_fim: Opti
         "SELECT ID, CHAVE_NF, IND_STATUS, DATA_INTEGRATION, EMPRESA_CNPJ, SERIE, NNF, DEMI, "
         "PROT_C_STAT, PROT_X_MOTIVO FROM documento_fiscal WHERE empresa_cnpj = ?"
     )
-    params = [NFAG_SANEPAR_CNPJ]
+    params = [NFAG_CLIENTE_B_CNPJ]
     if data_inicio:
         query += " AND DATA_INTEGRATION >= ?"
         params.append(data_inicio)
@@ -16600,7 +16680,7 @@ def _consultar_dashboard_sanepar_nfag(data_inicio: Optional[str], data_fim: Opti
     try:
         linhas, colunas = executar_query(conn, query, params=tuple(params), fetch=True, raise_on_error=True)
     except Exception as exc:
-        logger.exception("Erro ao consultar dashboard Sanepar/NFAg")
+        logger.exception("Erro ao consultar dashboard ClienteB/NFAg")
         return {"ok": False, "erro": f"Erro na consulta: {exc}"}
     finally:
         fechar_conexao(conn)
@@ -16808,14 +16888,14 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                 return
             self._enviar_json({"ok": True, "clientes": _carregar_dashboards_clientes()})
 
-        elif caminho == "/api/dashboards-clientes/sanepar/nfag":
+        elif caminho == "/api/dashboards-clientes/cliente_b/nfag":
             if not _tem_acesso_dashboards_clientes(sessao):
                 self._enviar_json({"ok": False, "erro": "sem permissão"}, status=403)
                 return
             query_nfag = urllib.parse.parse_qs(parsed.query)
             data_inicio = query_nfag.get("data_inicio", [None])[0]
             data_fim = query_nfag.get("data_fim", [None])[0]
-            resultado = _consultar_dashboard_sanepar_nfag(data_inicio, data_fim)
+            resultado = _consultar_dashboard_cliente_b_nfag(data_inicio, data_fim)
             self._enviar_json(resultado)
 
         elif caminho == "/sobre":
@@ -16890,24 +16970,24 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
         elif caminho == "/contingencias":
             self._enviar_html(_montar_contingencias_html(sessao))
 
-        elif caminho == "/relatorios-shein":
-            if _tem_acesso_relatorios_shein(sessao):
-                self._enviar_html(_montar_relatorios_shein_html(sessao))
+        elif caminho == "/relatorios-cliente_a":
+            if _tem_acesso_relatorios_cliente_a(sessao):
+                self._enviar_html(_montar_relatorios_cliente_a_html(sessao))
             else:
-                self._enviar_html(_montar_usuarios_negado_html(sessao, "Relatórios Shein"), status=200)
+                self._enviar_html(_montar_usuarios_negado_html(sessao, "Relatórios ClienteA"), status=200)
 
-        elif caminho.startswith("/api/relatorios-shein/"):
-            if not _tem_acesso_relatorios_shein(sessao):
+        elif caminho.startswith("/api/relatorios-cliente_a/"):
+            if not _tem_acesso_relatorios_cliente_a(sessao):
                 self._enviar_json({"ok": False, "erro": "sem permissão"}, status=403)
                 return
 
-            if caminho == "/api/relatorios-shein/status":
-                with _lock_relatorio_shein_auto:
-                    self._enviar_json(dict(estado_relatorio_shein_automatico))
+            if caminho == "/api/relatorios-cliente_a/status":
+                with _lock_relatorio_cliente_a_auto:
+                    self._enviar_json(dict(estado_relatorio_cliente_a_automatico))
                 return
 
-            if caminho == "/api/relatorios-shein/log":
-                caminho_log = os.path.join(_base_path_app(), "logs", "relatorios_shein.log")
+            if caminho == "/api/relatorios-cliente_a/log":
+                caminho_log = os.path.join(_base_path_app(), "logs", _ARQ_LOG_RELATORIO_A)
                 if not os.path.exists(caminho_log):
                     self._enviar_json({"ok": True, "linhas": [], "aviso": "Ainda não há nada registrado."})
                     return
@@ -16918,7 +16998,7 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                     self._enviar_json({"ok": False, "erro": f"Não foi possível ler o log: {e}"}, status=500)
                 return
 
-            if caminho == "/api/relatorios-shein/existe":
+            if caminho == "/api/relatorios-cliente_a/existe":
                 data_str = urllib.parse.parse_qs(parsed.query).get("data", [None])[0]
                 try:
                     data = datetime.strptime(data_str, "%Y-%m-%d")
@@ -16928,7 +17008,7 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                 data_arquivo = data.strftime("%d-%m-%Y")
                 nome_notas = f"{data_arquivo}.xlsx"
                 nome_canceladas = f"Canceladas_{data_arquivo}.xlsx"
-                pasta = _pasta_saida_relatorios_shein(data)
+                pasta = _pasta_saida_relatorios_cliente_a(data)
                 existe_notas = os.path.isfile(os.path.join(pasta, nome_notas))
                 existe_canceladas = os.path.isfile(os.path.join(pasta, nome_canceladas))
                 self._enviar_json({
@@ -16939,16 +17019,16 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                 })
                 return
 
-            if caminho.startswith("/api/relatorios-shein/download-zip/"):
+            if caminho.startswith("/api/relatorios-cliente_a/download-zip/"):
                 # baixa os 2 arquivos (Notas + Canceladas) de uma data como um
                 # zip só, nomeado com a própria data (ex.: 09-08-2026.zip) - o
                 # zip é montado na hora, em memória, não fica salvo em disco
-                data_str = urllib.parse.unquote(caminho[len("/api/relatorios-shein/download-zip/"):])
+                data_str = urllib.parse.unquote(caminho[len("/api/relatorios-cliente_a/download-zip/"):])
                 if not re.fullmatch(r"\d{2}-\d{2}-\d{4}", data_str):
                     self.send_response(400)
                     self.end_headers()
                     return
-                pasta = _localizar_pasta_relatorio_shein_por_data_str(data_str)
+                pasta = _localizar_pasta_relatorio_cliente_a_por_data_str(data_str)
                 nome_notas = f"{data_str}.xlsx"
                 nome_canceladas = f"Canceladas_{data_str}.xlsx"
                 caminho_notas = os.path.join(pasta, nome_notas)
@@ -16972,8 +17052,8 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(conteudo_zip)
                 return
 
-            if caminho.startswith("/api/relatorios-shein/download/"):
-                nome_arquivo = urllib.parse.unquote(caminho[len("/api/relatorios-shein/download/"):])
+            if caminho.startswith("/api/relatorios-cliente_a/download/"):
+                nome_arquivo = urllib.parse.unquote(caminho[len("/api/relatorios-cliente_a/download/"):])
                 # trava contra path traversal - só permite exatamente o padrão
                 # de nome que a gente mesmo gera, nunca um caminho arbitrário
                 if not re.fullmatch(r"(Canceladas_)?\d{2}-\d{2}-\d{4}\.xlsx", nome_arquivo):
@@ -16983,7 +17063,7 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                 # a data sempre está no final do nome (com ou sem o prefixo
                 # "Canceladas_"), usada pra reconstruir a pasta Mês/Dia certa
                 data_do_nome = nome_arquivo.replace("Canceladas_", "").replace(".xlsx", "")
-                pasta = _localizar_pasta_relatorio_shein_por_data_str(data_do_nome)
+                pasta = _localizar_pasta_relatorio_cliente_a_por_data_str(data_do_nome)
                 caminho_completo = os.path.join(pasta, nome_arquivo)
                 if not os.path.isfile(caminho_completo):
                     self.send_response(404)
@@ -17031,7 +17111,7 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                     "genero": info.get("genero") or "",
                     "admin": bool(info.get("admin")),
                     "pode_manutencao_alertas": bool(info.get("pode_manutencao_alertas")),
-                    "pode_relatorios_shein": bool(info.get("pode_relatorios_shein")),
+                    "pode_relatorios_cliente_a": bool(info.get("pode_relatorios_cliente_a")),
                     "pode_dash_financeiro": bool(info.get("pode_dash_financeiro")),
                     "pode_manutencao_rejeicoes": bool(info.get("pode_manutencao_rejeicoes")),
                     "pode_dados_sensiveis": bool(info.get("pode_dados_sensiveis")),
@@ -17416,7 +17496,7 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                     return
                 token = _criar_sessao(
                     usuario, bool(info.get("admin")),
-                    bool(info.get("pode_manutencao_alertas")), bool(info.get("pode_relatorios_shein")),
+                    bool(info.get("pode_manutencao_alertas")), bool(info.get("pode_relatorios_cliente_a")),
                     bool(info.get("pode_dash_financeiro")), bool(info.get("pode_manutencao_rejeicoes")),
                     bool(info.get("pode_dados_sensiveis")), bool(info.get("pode_manutencao_relatorios")),
                     bool(info.get("pode_manutencao_usuarios")),
@@ -17555,7 +17635,7 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
             )
             self._enviar_json({"ok": True})
 
-        elif caminho == "/api/usuarios/permissao-shein":
+        elif caminho == "/api/usuarios/permissao-cliente_a":
             if not sessao["admin"]:
                 self._enviar_json({"ok": False, "erro": "requer administrador"}, status=403)
                 return
@@ -17566,13 +17646,13 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
                 self._enviar_json({"ok": False, "erro": "usuário não encontrado"}, status=404)
                 return
 
-            USUARIOS_WEB[usuario]["pode_relatorios_shein"] = nova_permissao
+            USUARIOS_WEB[usuario]["pode_relatorios_cliente_a"] = nova_permissao
             _salvar_usuarios(USUARIOS_WEB)
             for s in SESSIONS.values():
                 if s["usuario"] == usuario:
-                    s["pode_relatorios_shein"] = nova_permissao
+                    s["pode_relatorios_cliente_a"] = nova_permissao
             logger_administracao.info(
-                "Permissão de Relatórios Shein do usuário '%s' alterada para %s por '%s'.",
+                "Permissão de Relatórios ClienteA do usuário '%s' alterada para %s por '%s'.",
                 usuario, nova_permissao, sessao["usuario"],
             )
             self._enviar_json({"ok": True})
@@ -18474,7 +18554,7 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
             senha = dados.get("senha", "")
             novo_admin = dados.get("admin", "") == "true"
             pode_manutencao = dados.get("pode_manutencao_alertas", "") == "true"
-            pode_shein = dados.get("pode_relatorios_shein", "") == "true"
+            pode_cliente_a = dados.get("pode_relatorios_cliente_a", "") == "true"
             pode_dash = dados.get("pode_dash_financeiro", "") == "true"
             pode_rejeicoes = dados.get("pode_manutencao_rejeicoes", "") == "true"
             pode_string_conn = dados.get("pode_dados_sensiveis", "") == "true"
@@ -18495,7 +18575,7 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
 
             USUARIOS_WEB[usuario] = {
                 "senha": senha, "admin": novo_admin,
-                "pode_manutencao_alertas": pode_manutencao, "pode_relatorios_shein": pode_shein,
+                "pode_manutencao_alertas": pode_manutencao, "pode_relatorios_cliente_a": pode_cliente_a,
                 "pode_dash_financeiro": pode_dash, "pode_manutencao_rejeicoes": pode_rejeicoes,
                 "pode_dados_sensiveis": pode_string_conn, "pode_manutencao_relatorios": pode_relatorios,
                 "pode_manutencao_usuarios": pode_manutencao_usuarios,
@@ -18600,21 +18680,21 @@ class _PainelHTTPHandler(BaseHTTPRequestHandler):
             logger_administracao.info("String Connection #%s excluída por '%s'.", id_conexao, sessao["usuario"])
             self._enviar_json({"ok": True})
 
-        elif caminho == "/api/relatorios-shein/gerar":
-            if not _tem_acesso_relatorios_shein(sessao):
+        elif caminho == "/api/relatorios-cliente_a/gerar":
+            if not _tem_acesso_relatorios_cliente_a(sessao):
                 self._enviar_json({"ok": False, "erro": "sem permissão"}, status=403)
                 return
             dados = self._ler_corpo_form()
-            logger_shein.info("Geração manual do relatório de %s disparada por '%s'.", dados.get("data", "?"), sessao["usuario"])
-            resultado = _gerar_relatorio_shein(dados.get("data", ""))
+            logger_cliente_a.info("Geração manual do relatório de %s disparada por '%s'.", dados.get("data", "?"), sessao["usuario"])
+            resultado = _gerar_relatorio_cliente_a(dados.get("data", ""))
             self._enviar_json(resultado, status=200 if resultado.get("ok") else 502)
 
-        elif caminho == "/api/relatorios-shein/forcar-automatico":
-            if not _tem_acesso_relatorios_shein(sessao):
+        elif caminho == "/api/relatorios-cliente_a/forcar-automatico":
+            if not _tem_acesso_relatorios_cliente_a(sessao):
                 self._enviar_json({"ok": False, "erro": "sem permissão"}, status=403)
                 return
-            logger_shein.info("Execução automática diária forçada manualmente por '%s'.", sessao["usuario"])
-            threading.Thread(target=_executar_relatorio_shein_diario, daemon=True).start()
+            logger_cliente_a.info("Execução automática diária forçada manualmente por '%s'.", sessao["usuario"])
+            threading.Thread(target=_executar_relatorio_cliente_a_diario, daemon=True).start()
             self._enviar_json({"ok": True})
 
         elif caminho == "/api/emailpack/executar":
@@ -18956,10 +19036,10 @@ class AlertasApp(tk.Tk):
         self.agendador = Agendador(self.job_states)
         self.agendador.iniciar()
 
-        # Relatório Shein automático - roda uma vez por dia junto com os
+        # Relatório ClienteA automático - roda uma vez por dia junto com os
         # outros alertas (mesmo agendador global, mesma thread), sem
         # precisar de uma thread própria.
-        schedule.every().day.at(HORARIO_RELATORIO_SHEIN_AUTOMATICO).do(_executar_relatorio_shein_diario)
+        schedule.every().day.at(HORARIO_RELATORIO_CLIENTE_A_AUTOMATICO).do(_executar_relatorio_cliente_a_diario)
 
         # Atualização Dash Financeiro - roda todo dia nesse horário, mas
         # só faz alguma coisa de verdade no dia 1 do mês (ver função pra
