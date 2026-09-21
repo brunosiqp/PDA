@@ -1,0 +1,28 @@
+# Credenciais e configs sensíveis (nunca publicar)
+.env
+.env.*
+!.env.example
+*.env
+CREDENCIAIS_CENTRALIZADAS.env
+chave.key
+config.dat
+
+# Dados de runtime do PDA (logins, feedbacks, conexões, controle de e-mails)
+usuarios.json
+feedbacks_usuarios.json
+historico_carreira.json
+ferias.json
+manutencao_usuarios_bases.json
+string_connections.json
+dash_financeiro_conexoes.json
+alertas_tempo_empresa_enviados.json
+dashboards_clientes.json
+
+# Logs e build
+logs/
+build/
+dist/
+*.exe
+*.spec
+__pycache__/
+*.pyc
