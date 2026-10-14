@@ -1,5 +1,7 @@
 # PDA · Painel de Automações
 
+🇺🇸 [Read in English](README.en.md)
+
 Painel web local para equipes de **Suporte e Monitoramento**: alertas automáticos,
 monitores, ferramentas internas e uma comunidade da equipe num lugar só. É um
 servidor web Python **puro** (`http.server`, sem framework) embutido numa janela
