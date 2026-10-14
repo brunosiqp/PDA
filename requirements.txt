@@ -1,0 +1,9 @@
+schedule
+pandas
+python-dotenv
+pyodbc
+pyinstaller
+requests
+xlsxwriter
+cryptography
+python-dateutil

@@ -6,114 +6,116 @@ infraestrutura, pessoas ou dados reais de nenhuma organização.
 ## Arquitetura
 
 Um servidor web Python **puro** (`http.server`, sem framework) embutido numa
-janela Tkinter, mais monitores/alertas agendados em background. Quase tudo vive
-em um único arquivo, `alertas_gui.py` (~19 mil linhas):
+janela Tkinter, mais monitores e alertas agendados em background. Empacotado
+com PyInstaller, roda na máquina de quem opera.
 
-- HTML/CSS/JS de cada página como strings Python (`_X_HTML_TEMPLATE`), com
-  placeholders `__PLACEHOLDER__` trocados via `.replace()`;
-- rotas HTTP em `if/elif caminho == "/rota"` dentro de `do_GET`/`do_POST`;
-- lógica de negócio, jobs agendados (lista `JOBS`) e a janela Tkinter.
+- **`alertas_gui.py`**: jobs e agendador (lista `JOBS`), montagem das páginas
+  (`_montar_*_html`), rotas HTTP (`_rotas_get` / `_rotas_post` dentro do
+  `_PainelHTTPHandler`) e a janela Tkinter.
+- **`areas/<área>/`**: cada área numa pasta, com `logica.py` (regras, banco,
+  arquivos) e `tela.py` (HTML/CSS/JS como texto). Área nova = pasta nova aqui,
+  nunca código de área direto no `alertas_gui.py`.
+- **`nucleo/`**: base compartilhada (caminhos, configuração, usuários, sessões e
+  permissões, equipes, fotos, notificações, Movidesk).
+- **`telas/`**: telas gerais e o CSS comum (`comum.py`: paleta, navbar,
+  rodapé). Só texto, sem lógica.
 
-Empacotado com PyInstaller, roda na máquina de quem opera (não é um serviço
-hospedado).
+### Regras da separação por área
 
-### Módulos locais que não estão neste repositório
-
-O arquivo importa pacotes locais (`core.*`, `alerta_core.*`, `features.*`) que
-**ainda não foram migrados** para este repositório. Sem eles o app não sobe;
-o que dá para fazer aqui é ler, revisar e validar estaticamente o código.
-
-## Configuração e segredos
-
-Nenhum segredo, endereço interno ou dado pessoal pode entrar no código nem no
-histórico do git. Toda configuração específica de ambiente vem de:
-
-1. **variáveis de ambiente** (ver `.env.example`);
-2. **arquivos de configuração locais** (`.env*`, `config.dat`, `chave.key`),
-   todos no `.gitignore`.
-
-Padrão híbrido para credenciais: tenta primeiro o arquivo central por seção e
-cai no `.env` legado individual se a seção não existir. Config ausente nunca
-derruba o app: mostra erro claro na tela.
-
-## Pseudônimos de cliente
-
-Nomes reais de cliente e fornecedor não entram no código. Convenção: `ClienteA`
-/ `cliente_a` / `CLIENTE_A` (por caixa, do A ao I) e `FornecedorA`. Ao criar
-algo novo que dependa de um cliente, escolha o próximo pseudônimo livre e use
-`_alias_real()` só onde o nome real é necessário de fato (chave de config,
-pasta, arquivo de log, nome do alerta). O mapa pseudônimo → real fica no
-`aliases_privados.json`, **fora do git**. Nunca escreva o nome real em código,
-comentário, teste ou mensagem de commit.
-
-## Versionamento
-
-SemVer em `VERSAO_PDA` (topo do arquivo, seção de versão):
-
-- **MAJOR**: só sobe por decisão explícita do mantenedor;
-- **MINOR**: funcionalidade nova ou reformulação visual relevante;
-- **PATCH**: ajuste pequeno ou correção de bug.
-
-Atualização manual a cada entrega.
+1. Nada em `areas/` ou `nucleo/` importa o `alertas_gui.py` (ele roda como
+   `__main__`; importar recarregaria o arquivo inteiro). O que for
+   compartilhado vai para o `nucleo/`.
+2. Variável que o resto do PDA altera (ex.: trava de execução) não é importada
+   e reatribuída de fora: a área expõe funções (`tentar_iniciar_execucao()`).
+3. O inverso também quebra: a área reatribuir (`global X; X = ...`) um nome que
+   o `alertas_gui.py` importou deixa o `alertas_gui` com o objeto velho.
+4. Loggers: `logging.getLogger("alertas.<nome>")` devolve o mesmo objeto
+   configurado no `alertas_gui.py`.
+5. CSS não é compartilhado entre páginas: cada template tem o seu `<style>`.
+   Ao copiar um elemento de uma página para outra, confira se a classe existe
+   no template de destino.
 
 ## Convenções de código
 
-- Sem framework web: rotas na mão.
-- Cores: `--teal` `#2db8cf`, `--lime` `#b0cb1c`, `--erro` `#f14c4c`, fundo
-  escuro (`#0b0f14`/`#181f27`); gradiente de marca teal → lime. Cada card do hub
-  tem uma cor (`--accent-card`) que não se repete.
-- Bolinha (`·`), nunca travessão (`—`/`–`), como separador visual.
-- Imagens inline em `data:image/...;base64,...` (sem assets externos).
+- Sem framework web: rotas em `if/elif caminho == "/rota"`; rotas de arquivo
+  binário com `caminho.startswith("/prefixo/")`. Exceção numa rota vai para o
+  log principal e a tela recebe um 500 em JSON.
+- Ações de escrita (INSERT/UPDATE/DELETE, envio de e-mail) sempre em `POST`.
+- HTML/CSS/JS como strings Python com placeholders `__PLACEHOLDER__` trocados
+  via `.replace()`. Dentro de template Python, quebra de linha numa string JS
+  se escreve `\\n`.
+- Configuração: `_obter_config_hibrido(secao, arquivo_legado, chaves)` tenta a
+  seção do `CREDENCIAIS_CENTRALIZADAS.env` e cai no `.env` legado. Config
+  ausente nunca derruba o app: mostra erro claro na tela.
+- Comparação de equipe sempre via `_pertence_a_equipe()`, nunca `==`.
+- Gates de acesso por card: funções `_tem_acesso_X(sessao)`.
+- Cores: `--teal` `#2db8cf`, `--lime` `#b0cb1c`, `--erro` `#f14c4c`; gradiente
+  de marca teal → lime. Cada card do início tem uma cor (`--accent-card`) que
+  não se repete.
+- **Modo claro**: o escuro é o padrão. CSS novo usa as variáveis (`--bg`,
+  `--bg-panel`, `--fg`, `--fg-dim`, `--border`...), `rgba(var(--tinta), A)`
+  para véus claros e `rgba(var(--poco), A)` para fundo de campo.
+- Bolinha (`·`), nunca travessão, como separador visual.
+- Imagens no app em `data:image/...;base64,...`; em e-mail, sempre anexadas por
+  Content-ID (o Outlook desktop não mostra data URI).
 - Texto de interface em português informal; comentários em português
   explicando o **porquê**, não o quê.
-- Comparação de equipe sempre via `_pertence_a_equipe()` (Python) /
-  `pertenceAEquipeMU()` (JS), nunca `==`.
-- Gates de acesso por card: funções `_tem_acesso_X(sessao)`.
 
 ## Gotcha: `JOBS` é avaliada na carga do módulo
 
 Toda função passada em `executar=` precisa estar **definida antes** da lista
-`JOBS`, senão dá `NameError` na inicialização. Isso não aparece no `py_compile`,
-só em runtime. Se a implementação real mora mais abaixo, crie um wrapper fino
-antes de `JOBS` que só chama a função por nome. O checklist abaixo já verifica
-isso.
+`JOBS`, senão dá `NameError` na inicialização (não aparece no `py_compile`). Se
+a implementação mora mais abaixo, crie um wrapper fino antes de `JOBS` que só
+chama a função por nome. O `validar.py` confere isso.
 
-## Checklist de validação (antes de considerar qualquer mudança pronta)
+## Versionamento
+
+`VERSAO_PDA` tem quatro níveis, `MAJOR.MINOR.FUNCIONALIDADE.AJUSTE`:
+
+| Nível | Quando sobe |
+|---|---|
+| **MAJOR** | Marco de produto ou arquitetura, por decisão dos mantenedores. |
+| **MINOR** | Fecha um ciclo de entregas numa entrada do changelog. Sobe por decisão dos mantenedores ou quando a FUNCIONALIDADE passaria de 9. |
+| **FUNCIONALIDADE** | Funcionalidade nova ou mudança visual relevante (zera o AJUSTE). De 0 a 9. |
+| **AJUSTE** | Correção ou ajuste pequeno. De 0 a 9. |
+
+Um ajuste depois de `x.y.5.9` vira `x.y.6.0`, e uma funcionalidade depois de
+`x.y.9.z` vira `x.(y+1).0.0`. O changelog fica na própria aplicação
+(`/changelog`), organizado por era (uma por MAJOR).
+
+## Checklist de validação
 
 ```bash
-python scripts/validar_pda.py
+python -X utf8 validar.py
 ```
 
-O script confere:
-
-1. `py_compile` do `alertas_gui.py`;
-2. todo bloco `<script>` é JS válido (parse real com Node; sem Node no PATH usa
-   o runtime do VS Code via `ELECTRON_RUN_AS_NODE`);
+1. compila todos os `.py`;
+2. todo bloco `<script>` é JS válido (parse real com Node);
 3. nenhuma rota HTTP duplicada;
-4. nenhum placeholder `__X__` sem `.replace()` correspondente;
-5. toda função de `JOBS[].executar=` definida antes da lista.
+4. nenhum placeholder `__X__` sem `.replace()`;
+5. toda função de `JOBS[].executar=` definida antes da lista;
+6. nenhuma cor `--accent-card` repetida;
+7. imports dos pacotes locais batem;
+8. todas as telas `_montar_*_html` montam (rodando o PDA numa cópia temporária);
+9. todas as rotas GET respondem sem erro com sessão de administrador (502/503
+   é a rota avisando que o banco não respondeu, esperado sem credenciais);
+10. o JS das telas já montadas é válido.
 
-"Compila" não é "funciona". Para lógica nova, extraia a função com `ast` /
-`exec()` num namespace mockado e teste cenários reais (sucesso, erro, casos de
-borda). Vários bugs só apareceram assim.
-
-Arquivo grande: navegue com `grep`/leitura por intervalo de linhas e valide a
-cada edição, sem acumular várias mudanças. Já houve corrupção na junção de blocos
-grandes de texto.
+"Compila" não é "funciona". Para lógica nova, extraia a função num namespace
+mockado e teste cenários reais (sucesso, erro, casos de borda); para DOM, use
+`jsdom`. Vários bugs só apareceram assim.
 
 ## Dados de runtime (nunca versionar)
 
-O app grava arquivos locais como `usuarios.json`, `feedbacks_usuarios.json`,
-`historico_carreira.json`, `ferias.json`, conexões e controle de e-mails
-enviados. Contêm dados pessoais e ficam no `.gitignore`. Em desenvolvimento,
-use apenas dados fictícios.
+O app grava `usuarios.json`, `feedbacks_usuarios.json`,
+`historico_carreira.json`, `ferias.json`, `mural_*.json`, `notificacoes.json`,
+fotos, anexos, logs e o estado das automações. Contêm dados pessoais e ficam no
+`.gitignore`. Em desenvolvimento, use apenas dados fictícios.
 
 ## Pendências conhecidas
 
-- Migrar `core/`, `alerta_core/` e `features/` para este repositório (já
-  sanitizados) para o app voltar a rodar a partir do clone.
-- Remover código morto da antiga tela de Usuários (`_montar_usuarios_html` e
-  `_USUARIOS_HTML_TEMPLATE`): as rotas de API dela continuam em uso pela tela
-  de Manutenção de Usuários, só o HTML/template ficou inalcançável.
-- Integrações externas (banco, Microsoft Graph, Movidesk) foram escritas e
-  testadas com conexões simuladas; teste em ambiente real antes de confiar.
+- Integrações externas (bancos, Microsoft Graph, Movidesk, Teams) foram
+  escritas e testadas com conexões simuladas; teste em ambiente real antes de
+  confiar.
+- A antiga tela de Usuários (`_montar_usuarios_html`) ficou como código morto:
+  as rotas de API dela continuam em uso pela Manutenção de Usuários.

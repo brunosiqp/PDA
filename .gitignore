@@ -1,29 +1,72 @@
-# Credenciais e configs sensíveis (nunca publicar)
-.env
-.env.*
+# Artefatos de build/execução
+__pycache__/
+*.pyc
+build/
+dist/
+*.log
+logs/
+relatorios_cliente_a_saida/
+
+# Segredos e credenciais (ficam só na máquina, nunca no git)
+.env*
 !.env.example
+!publicacao/publico/.env.example
+/env.*
 *.env
+*.zip
 CREDENCIAIS_CENTRALIZADAS.env
-aliases_privados.json
 chave.key
 config.dat
+string_connections.json
+dash_financeiro_conexoes.json
 
-# Dados de runtime do PDA (logins, feedbacks, conexões, controle de e-mails)
+# Dados que o PDA grava em tempo de execução (pessoais/RH). Fora do git porque
+# mudam na remota a cada uso: versionar faria o git pull brigar com eles.
 usuarios.json
 feedbacks_usuarios.json
 historico_carreira.json
 ferias.json
-manutencao_usuarios_bases.json
-string_connections.json
-dash_financeiro_conexoes.json
+mural_palmas.json
+mural_comentarios.json
+mural_avisos_ferias.json
+mural_posts.json
+central_monitores.json
+central_monitores.json.bak
+anexos_mural/
+notificacoes.json
+acessos_pda.json
+comunicados_enviados.json
+ranks_produtos.json
+loja.json
+loja.json.tmp
+halloween_26.json
+halloween_26.json.tmp
 alertas_tempo_empresa_enviados.json
-dashboards_clientes.json
+fotos_usuarios/
+anexos_feedbacks/
+# Reprocessamento CTe2: estado, chaves bloqueadas e auditoria (só a pasta da raiz, não areas/reprocessamento_cte2)
+/reprocessamento_cte2/
 
-# Logs e build
-logs/
-build/
-dist/
-*.exe
-*.spec
-__pycache__/
-*.pyc
+# Legado com token do Movidesk escrito no código (trocar por variável de ambiente antes de versionar)
+Alertas Consolidado/Horas/relatorio_horas.py
+# Relatórios gerados e pacotes de XML (dados de pessoas/clientes)
+*.xlsx
+*.rar
+
+# Config local do Claude Code (prévias, permissões)
+.claude/
+
+# Scripts de carga inicial de credenciais: têm senhas em texto puro (rodar uma vez e apagar)
+cadastrar_senhas_dash_financeiro.py
+# dados do LongNameJanitor ClienteQ (3.3.2.0): config, estado, cache de NF e histórico
+/longnamejanitor/
+/consumo_indevido/
+numeros_sobre.json
+
+# NNU 20 -> 15 (3.4.9.0): config, estado, lotes e relatórios gravados em runtime
+/nnu_status/
+
+# Espelho público (publicacao/): relatório com o mapa real -> pseudônimo de cada execução
+publicacao/relatorio_ultima_execucao.txt
+# Cópias legadas do alerta_core/env.py (o /env.* acima só vale pra raiz)
+Alertas Consolidado/**/env.py
